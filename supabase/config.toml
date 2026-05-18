@@ -12,17 +12,27 @@
 
 project_id = "agyiylncvchzifuzvnew"
 
+# site_url + redirect allow-list mirror the hosted auth config (PATCHed via the
+# Management API in PR2) so a future `supabase db reset` / local stack doesn't
+# revert production OAuth. *.up.railway.app is temporary — the custom-domain
+# pass updates this together with the GitHub App + Railway env.
 [auth]
-site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+site_url = "https://web-production-18dfa1.up.railway.app"
+additional_redirect_urls = [
+  "http://localhost:3000",
+  "http://localhost:3000/auth/callback",
+  "https://web-production-18dfa1.up.railway.app",
+  "https://web-production-18dfa1.up.railway.app/auth/callback",
+]
 
-# GitHub provider is enabled in PR1 once the usemount.dev GitHub App exists
-# (its client_id / client_secret double as the Supabase GitHub OAuth credentials —
-# this is the seam that lets Step 3 match an App installation back to a user).
+# GitHub provider was ENABLED in PR1 (its client_id / client_secret double as
+# the Supabase GitHub OAuth credentials — the seam that lets Step 3 match an
+# App installation back to a user). Kept true here to match the hosted config.
 [auth.external.github]
-enabled = false
+enabled = true
 
-# Google provider is enabled in PR2 (Step 2) — requires a Google Cloud OAuth
-# client, which is a separate one-time setup outside this CLI's reach.
+# Google provider is DEFERRED to a PR2.x follow-up (R1): it needs a Google
+# Cloud OAuth client, a separate one-time console setup outside this CLI's
+# reach. The login button shows "coming soon" until then.
 [auth.external.google]
 enabled = false

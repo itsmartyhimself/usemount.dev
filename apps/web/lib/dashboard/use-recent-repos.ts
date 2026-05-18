@@ -1,22 +1,43 @@
 "use client"
 
-import { useMemo } from "react"
-import { DEMO_RECENT_REPOS, DEMO_REPOS } from "@/lib/dashboard/demo"
+import { useEffect, useState } from "react"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
+import {
+  mapRepoConnection,
+  type RepoConnectionRow,
+} from "@/lib/dashboard/from-rows"
 import type { RepoConnection } from "@/lib/dashboard/types"
 
-// TODO: ROADMAP §Dashboard — replace with Supabase fetch keyed off the signed-in
-// user's workspace memberships. Today reads DEMO_RECENT_REPOS.
+const SELECT =
+  "id,workspace_id,org_repo,default_branch,connected_at,instances(id,branch,pinned,last_synced_commit_sha,last_synced_at,build_status)"
+
+// Most-recently-synced connected repos for the signed-in user (RLS-scoped to
+// member workspaces). Signature unchanged: returns RepoConnection[]; resolves
+// to [] until repo_connections exist (Step 3).
 export function useRecentRepos(limit: number): RepoConnection[] {
-  return useMemo(() => {
-    const sorted = [...DEMO_RECENT_REPOS].sort(
-      (a, b) => b.viewedAtMs - a.viewedAtMs,
-    )
-    const repos: RepoConnection[] = []
-    for (const entry of sorted) {
-      const repo = DEMO_REPOS.find((r) => r.id === entry.repoId)
-      if (repo) repos.push(repo)
-      if (repos.length >= limit) break
+  const [repos, setRepos] = useState<RepoConnection[]>([])
+
+  useEffect(() => {
+    let active = true
+    const supabase = createSupabaseBrowserClient()
+
+    void (async () => {
+      const { data } = await supabase
+        .from("repo_connections")
+        .select(SELECT)
+        .eq("active", true)
+      if (!active) return
+      const mapped = ((data as RepoConnectionRow[]) ?? [])
+        .map(mapRepoConnection)
+        .sort((a, b) => b.lastSyncedAtMs - a.lastSyncedAtMs)
+        .slice(0, limit)
+      setRepos(mapped)
+    })()
+
+    return () => {
+      active = false
     }
-    return repos
   }, [limit])
+
+  return repos
 }

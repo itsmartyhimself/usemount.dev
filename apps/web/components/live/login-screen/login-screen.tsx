@@ -1,7 +1,25 @@
+"use client"
+
 import { AuthButton } from "@/components/live/auth-button"
 import { HeroCard } from "@/components/live/hero-card"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
 
 export function LoginScreen() {
+  const signInWithGithub = () => {
+    const supabase = createSupabaseBrowserClient()
+    void supabase.auth.signInWithOAuth({
+      provider: "github",
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
+    })
+  }
+
+  // Google OAuth provider is deferred to a PR2.x follow-up — it needs a Google
+  // Cloud OAuth client (separate console setup). Button stays visually
+  // unchanged per CONVENTIONS (no disabled restyle).
+  const signInWithGoogle = () => {
+    window.alert("Google sign-in is coming soon.")
+  }
+
   return (
     <HeroCard
       brand={
@@ -42,8 +60,8 @@ export function LoginScreen() {
           borderRadius: "var(--radius-5)",
         }}
       >
-        <AuthButton provider="github" href="/" />
-        <AuthButton provider="google" href="/" />
+        <AuthButton provider="github" onClick={signInWithGithub} />
+        <AuthButton provider="google" onClick={signInWithGoogle} />
       </div>
     </HeroCard>
   )

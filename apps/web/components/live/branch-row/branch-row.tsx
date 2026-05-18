@@ -10,7 +10,7 @@ import { Pin, PinFilled, Renew } from "@carbon/icons-react"
 import { IconButton } from "@/components/live/icon-button"
 import { StatusDot } from "@/components/live/status-dot"
 import { formatRelativeTimeShort } from "@/lib/time/relative"
-import { DEMO_NOW, DEMO_REPOS, workspaceForRepo } from "@/lib/dashboard/demo"
+import { DEMO_REPOS, workspaceForRepo } from "@/lib/dashboard/demo"
 import type { Branch, RepoStatus } from "@/lib/dashboard/types"
 
 interface BranchRowProps {
@@ -80,7 +80,7 @@ function BranchRowBase(
   const metaColor = isStale ? "var(--color-text-tertiary)" : "var(--color-text-secondary)"
   const relTime = formatRelativeTimeShort(
     new Date(branch.lastSyncedAtMs),
-    new Date(DEMO_NOW),
+    new Date(),
   )
 
   return (

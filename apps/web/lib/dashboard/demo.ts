@@ -1,13 +1,14 @@
 import type {
   Branch,
   Member,
-  RecentRepo,
   RepoConnection,
-  User,
   Workspace,
 } from "./types"
 
-// TODO: ROADMAP §Dashboard — replace with Supabase fetch keyed off the signed-in user.
+// Staged demo data (D3): the dashboard read path (workspaces / repos / recent
+// / user) is now Supabase-sourced. What remains here is consumed only by the
+// connect flow + kept helpers (workspaceForRepo / synthesizeUnpinnedBranches)
+// and is removed in PR3/Step 4. NOW stays internal — those helpers need it.
 const NOW = Date.UTC(2026, 4, 11, 14, 0, 0)
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -55,12 +56,6 @@ export const DEMO_WORKSPACES: Workspace[] = [
   PERSONAL_WORKSPACE,
   ACME_WORKSPACE,
 ]
-
-export const DEMO_USER: User = {
-  id: "u-1",
-  name: "Jules Bell",
-  email: "jules@acme.co",
-}
 
 function branch(b: Partial<Branch> & Pick<Branch, "id" | "name" | "repoId">): Branch {
   return {
@@ -187,25 +182,6 @@ export const DEMO_REPOS: RepoConnection[] = [
   },
 ]
 
-export const DEMO_RECENT_REPOS: RecentRepo[] = [
-  {
-    repoId: "r-1",
-    viewedAtMs: NOW - 10 * MIN,
-    highlight: "dusk",
-    subtitle: "main · 18 branches",
-  },
-  {
-    repoId: "r-2",
-    viewedAtMs: NOW - 1 * HOUR,
-    subtitle: "main · 9 branches",
-  },
-  {
-    repoId: "r-5",
-    viewedAtMs: NOW - 3 * HOUR,
-    subtitle: "main · 3 branches",
-  },
-]
-
 export const DEMO_INSTALLATIONS = [
   { id: "inst-acme", login: "acme", reposCount: 12, primary: true },
   { id: "inst-jbell", login: "jbell", reposCount: 7, primary: false },
@@ -265,5 +241,3 @@ export function workspaceForRepo(repoId: string): Workspace {
     DEMO_WORKSPACES.find((w) => w.id === repo.workspaceId) ?? PERSONAL_WORKSPACE
   )
 }
-
-export const DEMO_NOW = NOW
