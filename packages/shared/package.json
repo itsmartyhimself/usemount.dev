@@ -12,7 +12,16 @@
   "exports": {
     ".": "./lib/index.js"
   },
+  "peerDependencies": {
+    "react": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@types/react": "^19",
     "typescript": "^5.9"
   }
 }

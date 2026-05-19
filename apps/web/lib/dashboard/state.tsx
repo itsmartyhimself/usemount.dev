@@ -1,11 +1,21 @@
 "use client"
 
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react"
 import {
-  DEMO_RECENT_REPOS,
-  DEMO_REPOS,
-  DEMO_WORKSPACES,
-} from "./demo"
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
+import { createSupabaseBrowserClient } from "@/lib/supabase/client"
+import {
+  mapRepoConnection,
+  mapWorkspace,
+  toRecentRepo,
+  type RepoConnectionRow,
+  type WorkspaceRow,
+} from "./from-rows"
 import type {
   FilterKey,
   RecentRepo,
@@ -18,6 +28,9 @@ interface DashboardState {
   workspaces: Workspace[]
   repos: RepoConnection[]
   recentRepos: RecentRepo[]
+  // false once the initial Supabase fetch settles. Additive — lets the page
+  // distinguish "still loading" from a genuinely empty account.
+  loading: boolean
   // Single-row expansion: only one RepoRow can be open at a time. Clicking a
   // different repo closes the previously-open one.
   expandedRepoId: string | null
@@ -49,6 +62,62 @@ export function DashboardStateProvider({
   const [filter, setFilter] = useState<FilterKey>("all")
   const [sort, setSort] = useState<SortKey>("lastSync")
 
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [repos, setRepos] = useState<RepoConnection[]>([])
+  const [recentRepos, setRecentRepos] = useState<RecentRepo[]>([])
+  // The signed-in user's personal workspace UUID, resolved from the signup
+  // trigger's row — the `filter === "personal"` branch keys off this, not a
+  // hardcoded id.
+  const [personalWorkspaceId, setPersonalWorkspaceId] = useState<string | null>(
+    null,
+  )
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let active = true
+    const supabase = createSupabaseBrowserClient()
+
+    void (async () => {
+      try {
+        const [{ data: wsRows }, { data: repoRows }] = await Promise.all([
+          supabase.from("workspaces").select("id,name,kind"),
+          supabase
+            .from("repo_connections")
+            .select(
+              "id,workspace_id,org_repo,default_branch,connected_at,instances(id,branch,pinned,last_synced_commit_sha,last_synced_at,build_status)",
+            )
+            .eq("active", true),
+        ])
+        if (!active) return
+
+        const mappedWorkspaces = ((wsRows as WorkspaceRow[]) ?? []).map(
+          mapWorkspace,
+        )
+        const mappedRepos = ((repoRows as RepoConnectionRow[]) ?? []).map(
+          mapRepoConnection,
+        )
+        const personal = ((wsRows as WorkspaceRow[]) ?? []).find(
+          (w) => w.kind === "personal",
+        )
+        const recent = [...mappedRepos]
+          .sort((a, b) => b.lastSyncedAtMs - a.lastSyncedAtMs)
+          .slice(0, 3)
+          .map(toRecentRepo)
+
+        setWorkspaces(mappedWorkspaces)
+        setRepos(mappedRepos)
+        setRecentRepos(recent)
+        setPersonalWorkspaceId(personal?.id ?? null)
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
   const toggleExpanded = (id: string) => {
     setExpandedRepoId((prev) => (prev === id ? null : id))
   }
@@ -63,9 +132,9 @@ export function DashboardStateProvider({
   }
 
   const filteredRepos = useMemo(() => {
-    let list = DEMO_REPOS
+    let list = repos
     if (filter === "personal") {
-      list = list.filter((r) => r.workspaceId === "ws-personal")
+      list = list.filter((r) => r.workspaceId === personalWorkspaceId)
     } else if (filter !== "all") {
       list = list.filter((r) => r.workspaceId === filter)
     }
@@ -74,12 +143,13 @@ export function DashboardStateProvider({
       return b.lastSyncedAtMs - a.lastSyncedAtMs
     })
     return sorted
-  }, [filter, sort])
+  }, [repos, filter, sort, personalWorkspaceId])
 
   const value: DashboardState = {
-    workspaces: DEMO_WORKSPACES,
-    repos: DEMO_REPOS,
-    recentRepos: DEMO_RECENT_REPOS,
+    workspaces,
+    repos,
+    recentRepos,
+    loading,
     expandedRepoId,
     expandedExpanderIds,
     filter,

@@ -5,7 +5,6 @@ import Link from "next/link"
 import { StatusDot } from "@/components/live/status-dot"
 import { formatRelativeTimeShort } from "@/lib/time/relative"
 import type { RecentRepo, RepoConnection, Workspace } from "@/lib/dashboard/types"
-import { DEMO_NOW } from "@/lib/dashboard/demo"
 
 interface RepoCardProps {
   repo: RepoConnection
@@ -54,7 +53,7 @@ export function RepoCard({
 
   const relTime = formatRelativeTimeShort(
     new Date(recent.viewedAtMs),
-    new Date(DEMO_NOW),
+    new Date(),
   )
   const href = `/${workspace.name.toLowerCase()}/${repo.orgRepo.split("/")[1]}/${primaryBranch}`
 

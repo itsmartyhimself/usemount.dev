@@ -1,10 +1,18 @@
 import Link from "next/link"
 import { Button } from "@/components/live/button"
 import { DarkModeTrigger } from "@/components/live/dark-mode"
+import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { NavAvatar } from "./nav-avatar"
 import { NavSearch } from "./nav-search"
 
-export function DashboardNav() {
+export async function DashboardNav() {
+  const supabase = await createSupabaseServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const avatarUrl =
+    (user?.user_metadata?.avatar_url as string | undefined) ?? null
+
   return (
     <header
       style={{
@@ -69,7 +77,7 @@ export function DashboardNav() {
           label="Connect Repo"
           href="/connect"
         />
-        <NavAvatar />
+        <NavAvatar avatarUrl={avatarUrl} />
         <DarkModeTrigger />
       </div>
     </header>

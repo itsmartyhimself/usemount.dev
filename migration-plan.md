@@ -416,5 +416,30 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       @supabase/supabase-js, OAuth wiring, re-wire demo hooks, delete demo
       data. Apply migration via Management API database/query. Enable Google
       provider once a Google Cloud OAuth client exists.</next>
+
+    <correction pr="2" date="2026-05-18">The PR1 &lt;auth&gt; "Deliberate
+      identity seam: one GitHub App is both the repo-access app and the
+      Supabase GitHub sign-in provider" is NOT viable and was corrected in PR2.
+      Supabase's stock `github` provider expects a GitHub **OAuth App**; a
+      GitHub **App**'s client_id/secret completes token exchange but fails the
+      subsequent profile/email fetch (`error=server_error`,
+      `unexpected_failure`, "Error getting user profile from external
+      provider") — a GitHub App has no OAuth-App user/email scope semantics and
+      PR1's manifest requested no email permission. PR2 resolution: created a
+      dedicated GitHub **OAuth App** "usemount.dev sign-in" (callback
+      https://agyiylncvchzifuzvnew.supabase.co/auth/v1/callback), wired its
+      client_id/secret into Supabase via Management API PATCH /config/auth. The
+      GitHub App usemount-dev (app_id 3758221) is retained SOLELY for repo
+      access (Step 3) — it is no longer the Supabase provider. Step 3's
+      matching seam is PRESERVED: `GET /user` returns the same numeric id for
+      the person via either app (verified live in B8#5: id 259984339 == the
+      PR1-recorded App-owner id), so oauth_identities.provider_user_id still
+      equals the installation account.id matched in Step 3. Security: the old
+      GitHub App client_secret was exposed in the PR2 session transcript (an
+      auth-config response dump) and must be rotated (GitHub App settings → new
+      client secret → update apps/api/.env.local GITHUB_APP_CLIENT_SECRET +
+      Railway api var). It is no longer in the Supabase provider (overwritten
+      by the OAuth App secret), so no Supabase update is needed for that
+      rotation.</correction>
   </pr>
 </migration-log>

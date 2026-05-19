@@ -1,14 +1,12 @@
 "use client"
 
 import {
-  Suspense,
   useCallback,
   useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
 } from "react"
-import { useSearchParams } from "next/navigation"
 import { AnimatePresence, motion } from "framer-motion"
 import { Collapsible } from "radix-ui"
 import { BranchRow } from "@/components/live/branch-row"
@@ -27,28 +25,21 @@ import {
 import { synthesizeUnpinnedBranches } from "@/lib/dashboard/demo"
 import type { Branch } from "@/lib/dashboard/types"
 
-function DashboardScene() {
-  const searchParams = useSearchParams()
-  const stateParam = searchParams.get("state")
-  const isEmpty = stateParam === "empty"
-  const initiallyExpanded = stateParam === "expanded" ? "r-1" : null
-
-  if (isEmpty) {
-    return <EmptyState />
-  }
-
-  return (
-    <DashboardStateProvider initiallyExpandedRepoId={initiallyExpanded}>
-      <DashboardContent />
-    </DashboardStateProvider>
-  )
+// EmptyState is now data-derived (no ?state= URL contract). It must be decided
+// inside the provider so it can read loading/repos. `loading` gates the
+// empty-vs-content flash on first paint.
+function DashboardGate() {
+  const { loading, repos } = useDashboardState()
+  if (loading) return null
+  if (repos.length === 0) return <EmptyState />
+  return <DashboardContent />
 }
 
 export function DashboardPage() {
   return (
-    <Suspense fallback={null}>
-      <DashboardScene />
-    </Suspense>
+    <DashboardStateProvider>
+      <DashboardGate />
+    </DashboardStateProvider>
   )
 }
 

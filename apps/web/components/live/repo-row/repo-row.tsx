@@ -21,7 +21,7 @@ import { StatusDot } from "@/components/live/status-dot"
 import { WorkspaceChip } from "@/components/live/workspace-chip"
 import { ROW_SPRING } from "@/components/live/row/row.config"
 import { formatRelativeTimeShort } from "@/lib/time/relative"
-import { DEMO_NOW, workspaceForRepo } from "@/lib/dashboard/demo"
+import { workspaceForRepo } from "@/lib/dashboard/demo"
 import type { RepoConnection, RepoStatus } from "@/lib/dashboard/types"
 
 interface RepoRowProps {
@@ -91,7 +91,7 @@ function RepoRowBase(
   const metaText = expanded
     ? `${pinnedCount} pinned · ${unpinnedCount} other`
     : STATUS_META[repo.status](
-        formatRelativeTimeShort(new Date(repo.lastSyncedAtMs), new Date(DEMO_NOW)),
+        formatRelativeTimeShort(new Date(repo.lastSyncedAtMs), new Date()),
       )
   const isFailed = repo.status === "failed"
   const isStale = repo.status === "stale"
