@@ -879,4 +879,91 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       blockers above folded into 4.2 scope. 4.1+ still NOT started (handoff
       STOP honoured).</pre-4.2-checklist>
   </addendum>
+
+  <addendum to="4" name="Step 4.2-prep — Storage + foundational solo prep"
+      branch="feat/migration-step-4.2-prep" base="staging" date="2026-05-19"
+      verified="builds+spike-live">
+    <secrets-policy>A fresh Supabase PAT was supplied by the owner for THIS
+      session only, used solely to verify project access + list buckets via the
+      Management API, then the owner deleted it. Bucket creation used the
+      service_role key (already in gitignored apps/api/.env.local — the
+      Management API has no bucket-create endpoint). Both secrets were staged to
+      mode-600 /tmp files, never echoed, never written to any committed file or
+      this log, and shredded (rm -P) immediately after provisioning. Only the
+      non-secret bucket name appears here. NOTE this addendum was written before
+      the owner-confirmed PAT deletion — the owner deletes it on done-report.</secrets-policy>
+
+    <context>Post-PR4/4.0b, the owner chose: push staging→origin first (done —
+      origin/staging 7d9d112→ad3f32a, the first push in this project; main
+      untouched at 6d124e1, Railway watches main so NO hosted deploy was
+      triggered), then do "Phase 1" = Storage + the foundational no-user prep,
+      THEN clear context and write a fresh 4.2 handoff (same style as the
+      PR2→PR3→PR4 handoffs) for the large 4.2 build. R7/R9 hosted cutover was
+      explicitly kept OUT of Phase 1 as its own deliberate later go-live gate.</context>
+
+    <solo-prep>
+      (1) @usemount/shared gained build-manifest.ts: BuildManifest /
+      BuildManifestControls / BuildManifestKind / IntrospectionGap, exported
+      from index.ts (Node16 .js). This is the paste-ready resolution of the
+      PR4 manifest-shape-duality finding — the BUILD-side contract the 4.2
+      worker emits (metadata + artifactUrl), kept deliberately separate from the
+      render-side ComponentManifest<P> (iframe supplies render at 4.3). Every
+      field is commented with its public.component_manifests column.
+      (2) spike.ts hardened + now CONSUMES the shared BuildManifest (proves the
+      contract end-to-end): PROP_CAP=40 caps the 4.0b 274-prop Radix-Slot
+      re-export blow-up BEFORE deriving controls (panel can't explode), flagged
+      gap=large-base-type; classifyGap() records the honest IntrospectionGap per
+      component; the report now prints the REAL product-quality number — RICH
+      (≥1 control) — plus a gap histogram.
+    </solo-prep>
+
+    <introspection-truth source="spike re-run, both targets">RICH (component
+      renders AND has ≥1 usable control) = ~33% dogfood (26/79) / ~34%
+      REV-Plugin (10/29). The earlier "introspected 63%/83%" counted "has any
+      prop at all" — RICH is the honest figure: ~2 of 3 real components would
+      render with an EMPTY controls panel under v1 tooling. The product promise
+      ("every client component renders") holds; the properties-panel richness
+      does not, yet. REV-Plugin gap histogram: external-union 14 (DOMINANT —
+      variant/size unions rdt can't read literals for), forwardref-unresolved 3,
+      no-props-interface 2, large-base-type 1. external-union is THE lever for
+      the 4.2 introspection-rate work. This is a v1 product-quality decision the
+      owner now owns explicitly (raise the rate in 4.2/Step-5, or ship
+      accepting the empty-panel fraction).</introspection-truth>
+
+    <storage>Hosted private bucket `component-artifacts` created via the
+      Storage API (POST https://&lt;ref&gt;.supabase.co/storage/v1/bucket,
+      service_role) — public=false, file_size_limit=52428800 (50 MiB);
+      verified by list. supabase/config.toml gained a documented [storage] +
+      [storage.buckets.component-artifacts] block (local-stack parity + durable
+      intent, mirroring how [auth] documents PR2's hosted PATCH). Holds the 4.2
+      worker's per-component esbuild bundles, keyed by instance, referenced from
+      component_manifests.artifact_url; PRIVATE by design (customer code, served
+      via signed URLs / the 4.3 preview route — mirrors workspace-RLS
+      isolation). 50 MiB is comfortable headroom (4.0b largest min bundle
+      ~1.9 MB). No RLS/Storage policies added yet — the 4.2 worker writes with
+      service_role (RLS-bypassing, same posture as the other tables); read-path
+      policies/signing are 4.3 scope.</storage>
+
+    <verification>Builds GREEN: @usemount/shared tsc -b (new build-manifest.ts),
+      @usemount/api tsc -b, web tsc --noEmit. Spike re-ran live on BOTH targets
+      with the shared BuildManifest + cap/gap: 79/79 &amp; 29/29 still bundle,
+      274-prop case now shows 274! (capped, gap=large-base-type), RICH% + gap
+      histogram emit correctly. Storage bucket existence verified via Storage
+      API list (public=false, 50 MiB). PAT validity confirmed against
+      GET /v1/projects. NOT done (deliberate): R7/R9 hosted cutover, any 4.1+
+      build code.</verification>
+
+    <pre-4.2-checklist>CLOSED now: real customer-codebase spike pass (4.0b);
+      Supabase Storage provisioned (this addendum); BuildManifest contract +
+      propFilter cap + introspection instrumentation (this addendum). STILL OPEN
+      before 4.2 GO-LIVE (not before 4.2 dev): R7/R9 coordinated pass (first
+      Railway deploy from main + GitHub App Setup/Webhook URLs + CORS lock) —
+      its own deliberate gate. FOLD INTO 4.2 BUILD SCOPE: the introspection-rate
+      work (external-union is the dominant gap), ts-morph fallback for
+      large-base-type/forwardref-unresolved, mount.config static-parse (RCE),
+      iframe CSP/sandbox (4.3). Next action per owner: clear context, then a
+      fresh full-scope 4.2 handoff doc (worker queue-lease loop + 4.1
+      push-webhook + 4.2 build/bundle/manifest-emit/Storage-upload + 4.3 iframe
+      runtime + 4.4 realtime), minus everything closed above.</pre-4.2-checklist>
+  </addendum>
 </migration-log>
