@@ -1,21 +1,22 @@
 /**
  * Step 4.0 spike — the build-pipeline decision gate (migration-plan.md Step 4).
  *
- * Run:  pnpm --filter @usemount/api spike      (tsx; NOT part of tsc -b)
+ * Run (dogfood):   pnpm --filter @usemount/api spike
+ * Run (any repo):  pnpm --filter @usemount/api spike <repoRoot> <componentsRelDir> <tsconfigRelPath> <label>
  *
- * HERMETIC. No Supabase, no Storage, no Railway, no GitHub clone, no PAT. It
- * runs the auto-manifest + bundle pipeline against THIS repo's own
- * apps/web/components/live/ tree — the dogfood target (migration-plan Step 4's
- * end goal is literally "self-hosted dogfood"; there is no external customer
- * codebase available here). The real Step-4.2 worker will instead shallow-clone
- * a customer repo via the install token; this spike validates the *tooling*
+ * HERMETIC. No Supabase, no Storage, no Railway, no GitHub clone, no PAT — it
+ * reads a checked-out tree on disk. The real Step-4.2 worker will instead
+ * shallow-clone via the install token; this spike validates the *tooling*
  * (react-docgen-typescript / ts-morph + esbuild), not the clone.
  *
- * GO/NO-GO HONESTY: a clean result here proves the tooling holds for a 41-
- * component Tailwind-v4 design system. It does NOT prove the architecture holds
- * for the 700-person Persona-C case — architecture-brief §3 requires a second
- * pass against a real customer codebase before 4.2 commits. This spike does not
- * make that claim.
+ * Default target = this repo's apps/web/components/live (the dogfood). Pass a
+ * repo root to point it at a real external customer codebase — architecture-
+ * brief §3/§319 requires that second pass before 4.2 commits.
+ *
+ * GO/NO-GO HONESTY: a clean result proves the tooling holds for the swept tree.
+ * Tooling success is independent of the bounded support matrix (Tailwind/Next
+ * version) — an out-of-matrix repo still yields a valid TOOLING signal; it just
+ * also proves the support-matrix connect-gate is load-bearing.
  */
 import { build } from "esbuild"
 import { withCompilerOptions } from "react-docgen-typescript"
@@ -24,11 +25,19 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
-const REPO = path.resolve(import.meta.dirname, "../../..")
-const WEB = path.join(REPO, "apps/web")
-const LIVE = path.join(WEB, "components/live")
-const OUT = path.join("/tmp", "usemount-spike")
-const TSCONFIG = path.join(WEB, "tsconfig.json")
+// argv: [repoRoot] [componentsRelDir] [tsconfigRelPath] [label]. No args =
+// dogfood (this repo's live/ tree) — backward-compatible with the PR4 run.
+const [, , argRoot, argComp, argTs, argLabel] = process.argv
+const SELF = path.resolve(import.meta.dirname, "../../..")
+const REPO = argRoot ? path.resolve(argRoot) : SELF
+const TARGET_DIR = path.join(REPO, argComp ?? "apps/web/components/live")
+const TSCONFIG = path.join(REPO, argTs ?? "apps/web/tsconfig.json")
+// esbuild alias base = the tsconfig's dir (where `@/*` → `./*` resolves from):
+// apps/web for the dogfood, the repo root for a flat customer repo.
+const ALIAS_BASE = path.dirname(TSCONFIG)
+const IS_DOGFOOD = !argRoot
+const LABEL = argLabel ?? "dogfood"
+const OUT = path.join("/tmp", "usemount-spike", LABEL)
 
 // react-docgen-typescript: literal unions → enum values; node_modules-parented
 // props filtered out. That propFilter is load-bearing — Button's exported type
@@ -100,15 +109,23 @@ function classifyFailures(src: string, introspected: boolean, built: boolean): F
   return f
 }
 
-// Entry per repo convention: <dir>/<dir>.tsx, else first non-manifest .tsx.
-function entryFor(dir: string): string | null {
-  const base = path.basename(dir)
-  const direct = path.join(dir, `${base}.tsx`)
-  if (existsSync(direct)) return direct
-  const tsx = readdirSync(dir).filter(
-    (f) => f.endsWith(".tsx") && !f.endsWith(".manifest.tsx"),
-  )
-  return tsx.length ? path.join(dir, tsx[0]) : null
+// Every .tsx under the components dir is a candidate entry — works for both
+// dir-per-component (dogfood live/) and flat (REV Plugin components/ui/*.tsx).
+// Non-component files (contexts, helpers) yield 0 rdt components → honestly
+// flagged limited-introspection, not hidden. Excludes co-located non-entries.
+const SKIP = /\.(manifest|config|test|spec|stories|d)\.(tsx?|ts)$|(^|\/)index\.tsx?$/
+function collectEntries(dir: string): string[] {
+  const out: string[] = []
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, e.name)
+    if (e.isDirectory()) {
+      if (e.name === "node_modules" || e.name.startsWith(".")) continue
+      out.push(...collectEntries(full))
+    } else if (e.name.endsWith(".tsx") && !SKIP.test(full)) {
+      out.push(full)
+    }
+  }
+  return out
 }
 
 async function bundleSize(entry: string): Promise<{ raw: number; min: number } | null> {
@@ -120,8 +137,8 @@ async function bundleSize(entry: string): Promise<{ raw: number; min: number } |
       format: "esm" as const,
       platform: "browser" as const,
       jsx: "automatic" as const,
-      absWorkingDir: WEB,
-      alias: { "@": WEB },
+      absWorkingDir: ALIAS_BASE,
+      alias: { "@": ALIAS_BASE },
       external: ["react", "react-dom", "react/jsx-runtime"],
       logLevel: "silent" as const,
     }
@@ -181,50 +198,52 @@ function tsMorphProbe(entry: string): { props: string[]; note: string } {
 
 async function main() {
   mkdirSync(OUT, { recursive: true })
-  const dirs = readdirSync(LIVE, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => path.join(LIVE, d.name))
-    .sort()
+  console.log(`═══ Spike target: ${LABEL} — ${path.relative(process.cwd(), TARGET_DIR)} ═══`)
+  if (!existsSync(TARGET_DIR)) {
+    console.error(`components dir not found: ${TARGET_DIR}`)
+    process.exit(1)
+  }
+  const entries = collectEntries(TARGET_DIR).sort()
 
-  // ── Head-to-head on Button ──────────────────────────────────────────────
-  const btn = path.join(LIVE, "button/button.tsx")
-  const t0 = performance.now()
-  const btnDocs = rdt.parse(btn)
-  const rdtMs = performance.now() - t0
-  const btnProps = btnDocs[0]?.props ?? {}
-  const tm = tsMorphProbe(btn)
-  console.log("═══ Open Decision #1 — introspection head-to-head (Button) ═══")
-  console.log(
-    `rdt:      ${Object.keys(btnProps).length} props in ${rdtMs.toFixed(0)}ms — ${Object.keys(btnProps).join(",")}`,
-  )
-  console.log(
-    `rdt:      enums resolved → ${Object.entries(btnProps)
-      .filter(([, p]: any) => p.type?.name === "enum")
-      .map(([n]) => n)
-      .join(",")}  (AriaAttributes/data-* intersection suppressed by node_modules propFilter)`,
-  )
-  console.log(`ts-morph: ${tm.props.length} interface members — ${tm.note}`)
-  console.log(`ts-morph: ${tm.props.join(" | ")}`)
-  console.log(
-    "FINDING: rdt auto-resolves the component's resolved prop type (defaults,\n" +
-      "  JSDoc, optionality) but REQUIRES the node_modules propFilter to tame the\n" +
-      "  forwardRef<P & AriaAttributes & DataAttributes> blow-up. ts-morph needs no\n" +
-      "  such taming but you must hand-walk forwardRef→props. → rdt is the right\n" +
-      "  PRIMARY (purpose-built, less code); ts-morph is the precise fallback for\n" +
-      "  the generics/unions rdt chokes on (architecture-brief §3 case 'limited\n" +
-      "  introspection'). Recommendation: rdt primary, ts-morph escape hatch.\n",
-  )
+  // ── Open Decision #1 head-to-head (dogfood-only; settled in PR4) ─────────
+  if (IS_DOGFOOD) {
+    const btn = path.join(TARGET_DIR, "button/button.tsx")
+    const t0 = performance.now()
+    const btnProps = rdt.parse(btn)[0]?.props ?? {}
+    const rdtMs = performance.now() - t0
+    const tm = tsMorphProbe(btn)
+    console.log("═══ Open Decision #1 — introspection head-to-head (Button) ═══")
+    console.log(
+      `rdt:      ${Object.keys(btnProps).length} props in ${rdtMs.toFixed(0)}ms — ${Object.keys(btnProps).join(",")}`,
+    )
+    console.log(
+      `rdt:      enums resolved → ${Object.entries(btnProps)
+        .filter(([, p]: any) => p.type?.name === "enum")
+        .map(([n]) => n)
+        .join(",")}  (AriaAttributes/data-* intersection suppressed by node_modules propFilter)`,
+    )
+    console.log(`ts-morph: ${tm.props.length} members — ${tm.note}`)
+    console.log(`ts-morph: ${tm.props.join(" | ")}`)
+    console.log(
+      "FINDING: rdt auto-resolves the resolved prop type but REQUIRES the\n" +
+        "  node_modules propFilter to tame forwardRef<P & Aria & Data>. ts-morph\n" +
+        "  needs no taming but you hand-walk forwardRef→props. → rdt PRIMARY,\n" +
+        "  ts-morph the precise fallback for the limited-introspection bucket.\n",
+    )
+  } else {
+    console.log(
+      "Open Decision #1 (rdt vs ts-morph) settled in PR4 on the dogfood — rdt\n" +
+        "primary, ts-morph fallback. This external pass measures the SWEEP only.\n",
+    )
+  }
 
-  // ── Full live/ sweep ────────────────────────────────────────────────────
+  // ── Full sweep ──────────────────────────────────────────────────────────
   const rows: any[] = []
   const sweepStart = performance.now()
-  for (const dir of dirs) {
-    const slug = path.basename(dir)
-    const entry = entryFor(dir)
-    if (!entry) {
-      rows.push({ slug, skipped: "no entry .tsx" })
-      continue
-    }
+  for (const entry of entries) {
+    const rel = path.relative(TARGET_DIR, entry)
+    const slug = rel.replace(/\.tsx$/, "").replace(/[/\\]/g, "-")
+    const dir = path.dirname(entry)
     const src = readFileSync(entry, "utf8")
     const ri0 = performance.now()
     let docs: any[] = []
@@ -287,7 +306,7 @@ async function main() {
   const sweepMs = performance.now() - sweepStart
 
   // ── Report ──────────────────────────────────────────────────────────────
-  console.log("═══ Full live/ sweep ═══")
+  console.log(`═══ Full sweep (${LABEL}) ═══`)
   console.log(
     "slug".padEnd(26) +
       "props".padStart(6) +
@@ -353,9 +372,10 @@ async function main() {
       "Render-side ComponentManifest<P> stays as-is for the iframe→host contract.\n",
   )
   console.log(
-    "GO/NO-GO: tooling (rdt+esbuild) holds for this 41-component Tailwind-v4 DS.\n" +
-      "Does NOT validate the 700-person Persona-C case — a real customer-codebase\n" +
-      "pass remains REQUIRED before 4.2 commits (architecture-brief §3).",
+    `GO/NO-GO (${LABEL}): tooling (rdt+esbuild) result above. Tooling success is\n` +
+      "independent of the bounded support matrix — an out-of-matrix repo (Tailwind\n" +
+      "v3 / Next 15) still yields a valid tooling signal AND proves the support-\n" +
+      "matrix connect-gate (Step 5 #6) is load-bearing (architecture-brief §3/§319).",
   )
 }
 
