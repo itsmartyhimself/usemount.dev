@@ -8,10 +8,19 @@ import { supabaseAdmin } from "../supabase/admin.js"
 // request bytes (not a re-stringified object) and constant-time compare
 // against x-hub-signature-256.
 //
-// PR3 scope = the installation-lifecycle events only (architecture-brief §11):
-// installation_repositories.removed, repository.archived, repository.renamed
-// → mark repo_connections inactive / rename. The push→build_jobs path is
-// Step 4. Unhandled events return 200 so GitHub stops retrying.
+// Lifecycle events (architecture-brief §11): installation_repositories.removed,
+// repository.archived, repository.renamed → mark repo_connections inactive /
+// rename. PR4 adds installation.deleted (full account/org uninstall) → the PR3
+// known-risk that a whole-account uninstall left every connection active=true
+// forever. The push→build_jobs path is Step 4. Unhandled events return 200 so
+// GitHub stops retrying.
+//
+// NOTE: `installation` and `installation_repositories` are GitHub-App lifecycle
+// events delivered to EVERY app automatically (PR1 <gotcha>: they are invalid
+// in manifest default_events for exactly this reason). So this handler fires in
+// production with NO GitHub App config change — there is no "subscribe to
+// installation events" R9 item to chase. installation.suspend/unsuspend are a
+// softer state (may reactivate) and are intentionally NOT handled in PR4.
 
 export const webhookRoutes = new Hono()
 
@@ -41,6 +50,16 @@ async function deactivateRepos(
     q = q.eq("github_install_id", installId)
   }
   await q
+}
+
+// Full account/org uninstall (`installation` event, action=deleted): GitHub
+// sends no repository list, the whole install is gone. Deactivate every
+// connection bound to it so dead connections don't linger active=true.
+async function deactivateAllForInstall(installId: number): Promise<void> {
+  await supabaseAdmin()
+    .from("repo_connections")
+    .update({ active: false })
+    .eq("github_install_id", installId)
 }
 
 webhookRoutes.post("/github/webhook", async (c) => {
@@ -84,6 +103,12 @@ webhookRoutes.post("/github/webhook", async (c) => {
       .from("repo_connections")
       .update({ org_repo: payload.repository.full_name })
       .eq("github_repo_id", payload.repository.id)
+  } else if (
+    event === "installation" &&
+    payload.action === "deleted" &&
+    typeof payload.installation?.id === "number"
+  ) {
+    await deactivateAllForInstall(payload.installation.id)
   }
 
   // 200 for handled and unhandled alike — a non-2xx makes GitHub retry.

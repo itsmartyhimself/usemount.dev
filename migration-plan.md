@@ -622,4 +622,188 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       demo.ts helpers die here). Address the two NEW known-risks in Step 4.
       Custom-domain coordinated pass (R9) + first hosted deploy (R7) outstanding.</next>
   </pr>
+
+  <pr id="4" branch="feat/migration-step-4" base="staging"
+      covers="Step 4.0 spike + the two PR3 security fixes"
+      status="complete" verified="paper+spike-live" date="2026-05-19">
+
+    <secrets-policy>No secrets in repo. PR4 added NO new required env and no new
+      secret to provision/rotate. The webhook secret read for the fix-2 paper
+      test was loaded from gitignored apps/api/.env.local and never printed.
+      Spike is hermetic (no Supabase/Storage/Railway/GitHub clone/PAT). Spike
+      output (manifests) written only to /tmp/usemount-spike (not committed).</secrets-policy>
+
+    <decisions>The product owner delegated all four open decisions to the
+      agent+advisor ("I'm just the product designer; do the research").
+      Resolved: (1) Fix-1 strategy = (C) HARD-DENY Org/Enterprise installs in
+      v1. The advisor recommended the canonical (A') "Request user authorization
+      during installation" but it needs a GitHub-App settings toggle + OAuth
+      callback the owner explicitly cannot operate; (C) REMOVES the attack
+      surface instead of guarding it with infra nobody can manage, matches PR3's
+      already-stated "personal installs are the v1 seam", and the dogfood target
+      (itsmartyhimself/usemount.dev) is a User account. (A') is the documented
+      post-cutline upgrade for org self-serve. (2) Introspection = run BOTH
+      react-docgen-typescript and ts-morph head-to-head on Button (Open Decision
+      #1's named experiment), rdt primary for the sweep. (3) Fix-1 sequencing =
+      moot under (C): zero human config, paper-verifiable in PR4 like PR3.
+      (4) Spike = hermetic dogfood-only; report states a real customer-codebase
+      pass remains REQUIRED before 4.2 (no overclaim).</decisions>
+
+    <audit-findings step="0a">PR3 re-audited fresh (security+setup). CONFIRMED
+      SOUND: webhook HMAC hashes the raw c.req.text() bytes, length-checks
+      before timingSafeEqual, 401s before JSON.parse (read + live-reconfirmed);
+      supabaseAdmin().auth.getUser is the sole trust root and every authed route
+      carries requireUser + assertWorkspace*; state-token has the
+      domain-separation prefix, 10-min TTL, +60s skew clamp, timing-safe compare
+      — the GITHUB_APP_WEBHOOK_SECRET reuse is acceptable (one-way HMAC, distinct
+      namespace), NOT "fixed"; Node16 .js extensions everywhere, apps/api/lib
+      gitignored with the apps/web/lib SOURCE caveat, .env.example honest, lazy
+      memoised supabaseAdmin (no eager module-load client). cors() is wide-open
+      '*' (R9) — left as-is, needs final domains. The two PR3 known-risks
+      reproduced exactly → became the two fixes. NEW MATERIAL FINDING (advisor-
+      confirmed): /repo-connections has the SAME ownership gap as
+      install-callback — its 409 only blocks RE-HOME of an already-existing
+      (install,repo) row, never the FIRST claim, so a direct POST bypasses an
+      install-callback-only gate. Fix 1 therefore had to be a shared helper on
+      BOTH routes. CORRECTION TO HANDOFF: `installation` /
+      `installation_repositories` are GitHub-App lifecycle events delivered to
+      EVERY app automatically (PR1 &lt;gotcha&gt;) — fix 2 fires in production
+      with NO App-config change; the handoff's "add installation events to the
+      subscription set" is a phantom R9 item, do not chase it.
+      installation.suspend/unsuspend (softer, reversible) intentionally NOT
+      handled — tracked.</audit-findings>
+
+    <security-fixes>
+      (1) Org/Enterprise ownership: new apps/api/src/github/installation-
+      ownership.ts exports assertInstallationOwnership(userId, installationId) —
+      getAppOctokit().apps.getInstallation → unknown/stale id 404; account.type
+      !== "User" (Organization, or Enterprise = no `type` field) 403 "not
+      supported yet"; User install verified account.id == users.github_user_id
+      (the PR2-correction seam), else 403. Called by install-callback.ts
+      (replaces the old inline User-only block; now runs BEFORE listInstallRepos
+      so no repo disclosure precedes the ownership proof) AND by connections.ts
+      POST /repo-connections (after assertWorkspaceOwner — closes the first-claim
+      gap). getAppOctokit import dropped from install-callback (helper owns it).
+      (2) installation.deleted: webhook.ts gained deactivateAllForInstall(id)
+      (UPDATE repo_connections active=false WHERE github_install_id=id, no
+      repo-list) + an `event==="installation" &amp;&amp; action==="deleted"`
+      dispatch branch after repository.renamed, before the final 200. Raw-body-
+      HMAC-before-parse contract untouched (branch is post-verify+parse).</security-fixes>
+
+    <spike-results script="apps/api/scripts/spike.ts" run="pnpm --filter @usemount/api spike">
+      HERMETIC, ran live against this repo's apps/web/components/live (the
+      dogfood target — no external customer codebase exists here). CONCRETE
+      METRICS: 41 components; 41/41 esbuild-bundled OK; 27/41 introspected
+      (props&gt;0). Button: rdt auto-derived controls that match the
+      hand-authored button.manifest.tsx 1:1 (variants 6 / sizes 3 / forms 2 /
+      booleans 3) AND additionally auto-detected an `icon: ReactNode` slot the
+      hand-authored manifest never declared — auto-introspection ≥ hand-authored,
+      a concrete Step-5 override-design signal. From TypeScript types alone, zero
+      manifest file — the core "auto-manifest path works" proof. OPEN DECISION
+      #1 head-to-head: rdt 14 props ~520ms AND ts-morph 14 props BOTH resolve
+      ButtonProps cross-file (it lives in button.config.ts) through
+      forwardRef&lt;ButtonProps &amp; AriaAttributes &amp; DataAttributes&gt; and
+      surface the union literals; rdt is purpose-built/less-code but REQUIRES a
+      node_modules propFilter to tame the aria-*/data-* blow-up, ts-morph needs
+      no taming but you hand-walk forwardRef→props → rdt PRIMARY, ts-morph the
+      precise fallback for the limited-introspection bucket. Sweep wall 26s
+      (single process, no clone, 41 × rdt + 2× esbuild raw/min). Bundle: total
+      minified ~13.7MB, avg ~334KB; DS primitives small (icon-button 27KB,
+      workspace-chip 27KB min) but app-shell-class files are 1–2MB min
+      (app-shell 1.9MB, sidebar-panel 1.8MB) → per-component + shared-deps-graph
+      + source_hash diff-only rebuild is MANDATORY not optional. Failure-mode
+      histogram (overlapping, architecture-brief §3): clean 18, limited-
+      introspection 14, no-use-client/rsc? 12, provider/context 4, routing-hooks
+      3, build-fail 0. MANIFEST-SHAPE DUALITY (primary re-plan input):
+      @usemount/shared ComponentManifest&lt;P&gt;.render:(props)=&gt;ReactNode is
+      an in-host RENDER-side concept; the pipeline emits METADATA + a bundle
+      artifact_url and the iframe (4.3) supplies render. The spike emits the DB
+      component_manifests COLUMN shape, not ComponentManifest. Re-plan adds a
+      build-side type to @usemount/shared (NOT done in PR4 — read-only there);
+      paste-ready BuildManifest printed by the spike. GO/NO-GO: the rdt+esbuild
+      tooling HOLDS for a 41-component Tailwind-v4 DS. It does NOT validate the
+      700-person Persona-C case — a real customer-codebase pass remains REQUIRED
+      before 4.2 commits (architecture-brief §3).</spike-results>
+
+    <deviations>New file installation-ownership.ts (handoff said "modify
+      install-callback.ts"; a shared helper on BOTH install-callback AND
+      connections.ts was required to actually close the hole — advisor-confirmed
+      — and is cleaner than duplicating). (A')→(C) for fix 1 (owner delegated;
+      cannot operate the GitHub-App toggle the advisor's recommended (A')
+      needs — (C) was the advisor's own named retreat; flagged to the advisor at
+      the done-gate, not a silent switch). Spike lives at apps/api/scripts/ —
+      NOT in tsc -b (tsconfig rootDir=src), runs via tsx; correct, it is tooling
+      not runtime. devDeps esbuild@0.28.0 / react-docgen-typescript@2.4.0 /
+      ts-morph@28.0.0 added to apps/api (esbuild was in root
+      onlyBuiltDependencies but a dependency nowhere — adding expected per R5;
+      caret + minimumReleaseAge resolved ≥7-day clean). ts-morph probe upgraded
+      to checker-resolve through forwardRef + the cross-file alias so the
+      head-to-head is honest, not a strawman.</deviations>
+
+    <verification>Builds GREEN: @usemount/shared tsc -b; @usemount/api tsc -b
+      (incl. new helper + modified webhook/install-callback/connections); web
+      tsc --noEmit; web next build (9 routes, ƒ Proxy present, /connect +
+      /connect/callback intact). Fix 2 (apps/api booted :4123, fake install id
+      999999999999 → UPDATE matches 0 rows, ZERO prod mutation): signed
+      installation.deleted→200 {ok:true}; bad-sig→401; no-sig→401; tampered-
+      body→401 (raw-body bound); regression installation_repositories.removed
+      →200. Fix 1: install-callback &amp; repo-connections no-bearer→401
+      (requireUser gate on both helper call sites); helper LIVE-exercised —
+      nonexistent installation_id → real GitHub App-JWT GET /app/installations
+      → 404 → HTTPException 404 "Installation not found". The org-deny and
+      User-mismatch branches are pure logic on the getInstallation response and
+      are code-traced (no real org installation is obtainable paper-only; PR3
+      precedent). Spike: live metrics above. NOT exercised (R7/R9, owner choice
+      — same as PR3): hosted webhook delivery, real install→connect round-trip,
+      Railway deploy. Operational: a stale prior-session background dev-server
+      pair ("sign-in check"/"sign-in test") failed when the :4123 teardown pkill
+      ran — incidental, trivially restarted; PR4 made ZERO web changes (mirrors
+      PR1's pkill note).</verification>
+
+    <known-risks>R1 two-app footgun stands (apps/api uses ONLY the GitHub App).
+      R7 apps/api never deploy-verified — first staging→main is its first hosted
+      run. R9 cors '*' + GitHub App Setup/Webhook URLs unset (but fix 2 needs NO
+      new App event subscription — corrected above; do not chase it). NEW:
+      Org/Enterprise installs are now HARD-DENIED in v1 (the hole is closed by
+      removing the surface, not guarding it); the (A') OAuth-on-install upgrade
+      is the documented path when org self-serve is needed (post-cutline,
+      owner-owned GitHub-App settings). installation.suspend/unsuspend not
+      handled (reversible state) — tracked. NEW Storage still unprovisioned
+      (hard dep for 4.2/4.3, NOT the spike). mount.config.ts execution = RCE on
+      the build worker and the iframe = the crown-jewel surface — binding
+      4.2/4.3 design constraints (parse mount.config statically via ts-morph AST,
+      NEVER import()/eval; iframe sandbox=allow-scripts WITHOUT allow-same-origin
+      + separate origin + strict CSP + narrow postMessage). Spike go/no-go:
+      validates tooling on the dogfood DS only — a real customer-codebase pass
+      is REQUIRED before 4.2. Pre-existing unchanged: branch-with-slash vs single
+      [branch] segment; non-unique slug scheme (v1-safe); `pnpm lint` fails on
+      PR2's nav-avatar.tsx (missing @next/eslint-plugin-next) — next build is the
+      real gate.</known-risks>
+
+    <next>Refined Step-4 plan, informed by the spike (STOP here per handoff —
+      4.1+ NOT started). Provision Supabase Storage FIRST (blocker for 4.2/4.3;
+      needs the NEW Supabase PAT — R2 — request from the owner, session-only).
+      4.1 push-webhook → build_jobs: HMAC reuse of the verified webhook.ts path;
+      MUST add per-(instance, head_sha) dedup + rate-limit — spike shows a build
+      is cheap (~0.3–1.5s/component) so amplification, not build cost, is the
+      DoS (HMAC proves "from GitHub", not "reasonable volume"). 4.2 worker
+      (FOR UPDATE SKIP LOCKED lease, 10-min reclaim): FIRST add the paste-ready
+      BuildManifest to @usemount/shared (render-side ComponentManifest&lt;P&gt;
+      stays for the iframe→host contract); rdt primary + ts-morph fallback for
+      the 14/41 limited-introspection bucket; per-component esbuild on a shared
+      deps graph; source_hash diff-only rebuild is mandatory (1–2MB shell files);
+      parse mount.config.ts via ts-morph AST, never import()/eval (RCE);
+      ephemeral tmpfs, no customer postinstall; upload bundles→Storage, upsert
+      component_manifests. 4.3 iframe runtime + preview/[manifestId] route:
+      separate origin, sandbox=allow-scripts WITHOUT allow-same-origin, strict
+      CSP, narrow typed postMessage; the 12/41 no-use-client + 4/41 provider +
+      3/41 routing-hooks buckets scope the iframe context-shim (router/theme/
+      provider auto-detect = Step 5); replace manifest.render with iframe mount;
+      DEMO_REGISTRY / sidebar-panel-provider / stage-content rewire + the
+      retained demo.ts helpers die here. 4.4 Realtime stale-viewer. Step 5:
+      failure-mode dispositions (spike already classifies them), support-matrix
+      connect gate, every-2h reconciler. R7/R9 coordinated pass + Storage
+      provisioning + a real customer-codebase spike pass all precede 4.2
+      go-live. Org support via (A') when org self-serve is needed.</next>
+  </pr>
 </migration-log>

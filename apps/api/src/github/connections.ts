@@ -8,6 +8,7 @@ import {
 } from "../lib/require-user.js"
 import { supabaseAdmin } from "../supabase/admin.js"
 import { getInstallationOctokit } from "./auth.js"
+import { assertInstallationOwnership } from "./installation-ownership.js"
 
 // repo_connection mutation + branch read. Split from install-callback.ts so
 // the GitHub-discovery surface and the DB-write surface stay separate.
@@ -69,6 +70,11 @@ repoConnectionRoutes.post("/repo-connections", async (c) => {
     parsed.data
 
   await assertWorkspaceOwner(workspaceId, user.id)
+  // Same gate as install-callback: prove the caller controls this
+  // installation_id. install-callback is the UI path, but a direct POST here
+  // with a guessed (installationId, githubRepoId) would otherwise first-claim
+  // an unowned install (the 409 below only blocks RE-HOME of an existing row).
+  await assertInstallationOwnership(user.id, installationId)
 
   const { data: ws, error: wsErr } = await supabaseAdmin()
     .from("workspaces")
