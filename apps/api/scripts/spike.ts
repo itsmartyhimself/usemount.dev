@@ -18,6 +18,11 @@
  * version) — an out-of-matrix repo still yields a valid TOOLING signal; it just
  * also proves the support-matrix connect-gate is load-bearing.
  */
+import type {
+  BuildManifest,
+  BuildManifestControls,
+  IntrospectionGap,
+} from "@usemount/shared"
 import { build } from "esbuild"
 import { withCompilerOptions } from "react-docgen-typescript"
 import { Project } from "ts-morph"
@@ -53,19 +58,51 @@ const rdt = withCompilerOptions(
   },
 )
 
-interface ControlMap {
-  variants?: { prop: string; options: string[] }
-  sizes?: { prop: string; options: string[] }
-  forms?: { prop: string; options: string[] }
-  booleans: string[]
-  slots: { prop: string; label: string }[]
-}
+// Reuse the SHARED build-side contract so the spike proves it end-to-end and
+// the 4.2 worker has a working reference (PR4 manifest-shape-duality finding).
+type ControlMap = BuildManifestControls
 type FailureMode =
   | "no-use-client(rsc?)"
   | "routing-hooks"
   | "provider/context"
   | "build-fail"
   | "limited-introspection"
+
+// A real component API rarely exceeds this. Beyond it, rdt has almost
+// certainly followed an intersection into a huge base type (Radix Slot / a
+// DOM-props re-export) — the 4.0b REV-Plugin ui-animate-ui-slot 274-prop
+// blow-up. The node_modules propFilter does NOT catch this: the props are
+// parented on the *customer's* re-export file, not node_modules. Cap so the
+// panel never explodes; flag the gap so 4.2 can ts-morph-fallback these.
+const PROP_CAP = 40
+
+// Honest reason rdt produced no usable controls — drives the limited-
+// introspection sidebar note + the 4.2 introspection-rate work. Mirrors the
+// IntrospectionGap union now in @usemount/shared.
+function classifyGap(
+  rawCount: number,
+  controls: ControlMap,
+  src: string,
+): IntrospectionGap | undefined {
+  if (rawCount > PROP_CAP) return "large-base-type"
+  const hasControls =
+    !!controls.variants ||
+    !!controls.sizes ||
+    !!controls.forms ||
+    controls.booleans.length > 0 ||
+    controls.slots.length > 0
+  if (hasControls) return undefined
+  if (/<[A-Z]\w*<[A-Z]/.test(src) || /\bfunction\s+\w+<[A-Z]/.test(src))
+    return "generic"
+  if (rawCount === 0) {
+    if (/\bforwardRef\b|\bmemo\(|=\s*\w+\([A-Z]/.test(src))
+      return "forwardref-unresolved"
+    return "no-props-interface"
+  }
+  // props exist but none yielded a control — typically a union/enum imported
+  // from node_modules whose literals rdt can't read.
+  return "external-union"
+}
 
 // Map an rdt prop set → the controls schema the canvas already consumes.
 function deriveControls(props: Record<string, any>): {
@@ -254,39 +291,45 @@ async function main() {
     }
     const riMs = performance.now() - ri0
     const comp = docs[0]
-    const props = comp?.props ?? {}
-    const introspected = Object.keys(props).length > 0
+    const rawProps = comp?.props ?? {}
+    const rawCount = Object.keys(rawProps).length
+    // Cap pathological blow-ups (274-prop Slot re-export) BEFORE deriving
+    // controls so the panel can't explode; the gap flag records why.
+    const props =
+      rawCount > PROP_CAP
+        ? Object.fromEntries(Object.entries(rawProps).slice(0, PROP_CAP))
+        : rawProps
+    const introspected = rawCount > 0
     const { controls, propsSchema } = deriveControls(props)
+    const gap = classifyGap(rawCount, controls, src)
     const bi0 = performance.now()
     const size = await bundleSize(entry)
     const biMs = performance.now() - bi0
     const failures = classifyFailures(src, introspected, !!size)
 
-    // Build-side manifest, shaped to the DB component_manifests COLUMNS —
-    // deliberately NOT the @usemount/shared ComponentManifest<P> (its
-    // render:(props)=>ReactNode is a render-side/in-host concept the iframe
-    // supplies at 4.3; the pipeline emits metadata + an artifact_url).
-    const manifest = {
+    // Emit the SHARED build-side BuildManifest (NOT render-side
+    // ComponentManifest<P>). Each field's DB column is documented on the type
+    // in packages/shared/src/build-manifest.ts.
+    const manifest: BuildManifest = {
       slug,
-      folder_path: path.relative(REPO, dir),
+      folderPath: path.relative(REPO, dir),
       title: comp?.displayName ?? slug,
-      kind: failures.includes("no-use-client(rsc?)") ? "maybe-rsc" : "component",
-      variants_json: {
-        variants: controls.variants,
-        sizes: controls.sizes,
-        forms: controls.forms,
-        booleans: controls.booleans,
-        slots: controls.slots,
-      },
-      states_json: {},
-      props_schema_json: propsSchema,
-      artifact_url: size ? `spike://bundle/${slug}.js` : null,
-      source_hash: createHash("sha256").update(src).digest("hex").slice(0, 16),
+      kind: !size
+        ? "unsupported"
+        : failures.includes("no-use-client(rsc?)")
+          ? "maybe-rsc"
+          : "component",
+      controls,
+      propsSchema,
+      states: {},
+      artifactUrl: size ? `spike://bundle/${slug}.js` : null,
+      sourceHash: createHash("sha256").update(src).digest("hex").slice(0, 16),
+      introspectionGap: gap,
     }
     writeFileSync(path.join(OUT, `${slug}.manifest.json`), JSON.stringify(manifest, null, 2))
     rows.push({
       slug,
-      props: Object.keys(props).length,
+      props: rawCount > PROP_CAP ? `${rawCount}!` : rawCount,
       ctrl:
         [
           controls.variants && "V",
@@ -300,6 +343,8 @@ async function main() {
       rawKB: size ? (size.raw / 1024).toFixed(0) : "FAIL",
       minKB: size ? (size.min / 1024).toFixed(0) : "FAIL",
       ms: (riMs + biMs).toFixed(0),
+      gap: gap ?? "",
+      introspected,
       flags: failures.join("+") || "clean",
     })
   }
@@ -333,18 +378,24 @@ async function main() {
     )
   }
   const built = rows.filter((r) => r.rawKB && r.rawKB !== "FAIL")
-  const introspectedN = rows.filter((r) => r.props > 0).length
+  const introspectedN = rows.filter((r) => r.introspected).length
+  const richN = rows.filter((r) => r.ctrl && r.ctrl !== "—").length
   const hist: Record<string, number> = {}
   for (const r of rows)
     for (const f of (r.flags ?? "").split("+")) if (f) hist[f] = (hist[f] ?? 0) + 1
+  const gapHist: Record<string, number> = {}
+  for (const r of rows) if (r.gap) gapHist[r.gap] = (gapHist[r.gap] ?? 0) + 1
   const totMin = built.reduce((s, r) => s + Number(r.minKB), 0)
+  const pct = (n: number) => `${((n / Math.max(rows.length, 1)) * 100).toFixed(0)}%`
   console.log("\n═══ Aggregate ═══")
   console.log(`components:            ${rows.length}`)
-  console.log(`introspected (props>0):${introspectedN}/${rows.length}`)
+  console.log(`introspected (any props):${introspectedN}/${rows.length} (${pct(introspectedN)})`)
+  console.log(`RICH (≥1 control):     ${richN}/${rows.length} (${pct(richN)}) — the rest render but show an EMPTY panel`)
   console.log(`bundled ok:            ${built.length}/${rows.length}`)
   console.log(`total minified:        ${totMin}KB  (avg ${(totMin / Math.max(built.length, 1)).toFixed(0)}KB)`)
   console.log(`sweep wall time:       ${(sweepMs / 1000).toFixed(1)}s  (rdt+esbuild, ${rows.length} components, single process, no clone)`)
   console.log(`failure-mode histogram:`, hist)
+  console.log(`introspection-gap histogram:`, gapHist, "(targets for 4.2 rate work)")
   console.log(`manifests written:     ${OUT}/*.manifest.json`)
 
   console.log(
