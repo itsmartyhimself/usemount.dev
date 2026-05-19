@@ -36,3 +36,23 @@ enabled = true
 # reach. The login button shows "coming soon" until then.
 [auth.external.google]
 enabled = false
+
+# Storage — provisioned in the Step 4.2-prep phase. The hosted private bucket
+# `component-artifacts` was created via the Storage API (service_role key); the
+# Management API has no bucket-create endpoint. This block documents it for
+# local-stack parity (a future `supabase start` seeds the same bucket) and as
+# the durable record of intent — the same pattern [auth] uses for the
+# PR2-PATCHed hosted auth config. It holds the Step-4.2 build worker's output:
+# per-component esbuild JS bundles, keyed by instance, referenced from
+# public.component_manifests.artifact_url. PRIVATE by design — bundles are
+# customer code, served via signed URLs / the 4.3 preview route, never public
+# (mirrors the workspace-RLS isolation on every table). 50 MiB/object cap;
+# revisit if a real component bundle exceeds it (the 4.0b spike's largest
+# minified bundle was ~1.9 MB, so 50 MiB is comfortable headroom).
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[storage.buckets.component-artifacts]
+public = false
+file_size_limit = "50MiB"
