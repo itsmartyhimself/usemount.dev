@@ -5,20 +5,24 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "spike": "tsx scripts/spike.ts",
     "build": "tsc -b",
     "start": "node lib/index.js"
   },
   "dependencies": {
-    "@usemount/shared": "workspace:*",
     "@hono/node-server": "^1",
     "@octokit/auth-app": "^8",
     "@octokit/rest": "^22",
     "@supabase/supabase-js": "^2.105.4",
+    "@usemount/shared": "workspace:*",
     "hono": "^4.12.18",
     "zod": "^4"
   },
   "devDependencies": {
     "@types/node": "^22",
+    "esbuild": "^0.28.0",
+    "react-docgen-typescript": "^2.4.0",
+    "ts-morph": "^28.0.0",
     "tsx": "^4",
     "typescript": "^5.9"
   }

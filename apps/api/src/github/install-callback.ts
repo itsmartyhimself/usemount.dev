@@ -5,7 +5,8 @@ import { GITHUB_APP_SLUG } from "../env.js"
 import { requireUser } from "../lib/require-user.js"
 import { signInstallState, verifyInstallState } from "../lib/state-token.js"
 import { supabaseAdmin } from "../supabase/admin.js"
-import { getAppOctokit, getInstallationOctokit } from "./auth.js"
+import { getInstallationOctokit } from "./auth.js"
+import { assertInstallationOwnership } from "./installation-ownership.js"
 
 // The connect-flow surface (file named per migration-plan's Critical files;
 // it carries the three install/discovery routes — the repo_connection write +
@@ -114,38 +115,11 @@ installRoutes.post("/github/install-callback", async (c) => {
 
   // Ownership: a valid (user-bound) state token does NOT prove this user owns
   // *this* installation_id — without this check any signed-in user could pass
-  // an arbitrary installation_id and read another account's repos. For a
-  // personal-account install, installation.account.id IS the GitHub numeric
-  // user id — exactly the oauth_identities/users.github_user_id seam the
-  // migration-plan + PR2 correction preserve. Org installs have account.id =
-  // the ORG id (no per-user membership data in v1) → not checkable here;
-  // tracked as a known risk for Step 4+.
-  let installAccount: { id: number; type?: string } | null = null
-  try {
-    const { data: install } = await getAppOctokit().apps.getInstallation({
-      installation_id: parsed.data.installationId,
-    })
-    if (install.account && "type" in install.account) {
-      installAccount = { id: install.account.id, type: install.account.type }
-    }
-  } catch {
-    throw new HTTPException(404, { message: "Installation not found" })
-  }
-  if (installAccount?.type === "User") {
-    const { data: u } = await supabaseAdmin()
-      .from("users")
-      .select("github_user_id")
-      .eq("id", user.id)
-      .maybeSingle()
-    if (
-      !u?.github_user_id ||
-      Number(installAccount.id) !== Number(u.github_user_id)
-    ) {
-      throw new HTTPException(403, {
-        message: "This installation belongs to a different GitHub account",
-      })
-    }
-  }
+  // an arbitrary installation_id and read another account's repos. The shared
+  // helper enforces it (User installs verified against users.github_user_id;
+  // Org/Enterprise hard-denied in v1). Runs BEFORE listInstallRepos so no repo
+  // disclosure ever precedes the ownership proof.
+  await assertInstallationOwnership(user.id, parsed.data.installationId)
 
   const { connectedKeys } = await userConnections(user.id)
   let repos: InstallRepo[]
