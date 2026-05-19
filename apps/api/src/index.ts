@@ -2,6 +2,9 @@ import { serve } from "@hono/node-server"
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { logger } from "hono/logger"
+import { installRoutes } from "./github/install-callback.js"
+import { repoConnectionRoutes } from "./github/connections.js"
+import { webhookRoutes } from "./github/webhook.js"
 
 // Local dev loads apps/api/.env.local. On Railway, env vars are injected into
 // the process directly (no file), so loadEnvFile throws there and we fall back
@@ -40,6 +43,13 @@ app.use("*", logger())
 app.use("*", cors())
 
 app.get("/health", (c) => c.json({ ok: true }))
+
+// GitHub App backend (Step 3). Routers define their own full paths and are
+// mounted at root. Auth is per-route (bearer for the connect surface, HMAC for
+// the webhook) — no global auth middleware so /health stays open.
+app.route("/", installRoutes)
+app.route("/", repoConnectionRoutes)
+app.route("/", webhookRoutes)
 
 const port = Number(process.env.PORT) || 4000
 

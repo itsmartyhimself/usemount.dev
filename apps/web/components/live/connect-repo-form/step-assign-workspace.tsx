@@ -1,14 +1,19 @@
 "use client"
 
 import { WorkspaceCard } from "@/components/live/workspace-card"
-import { DEMO_WORKSPACES } from "@/lib/dashboard/demo"
+import type { Workspace } from "@/lib/dashboard/types"
 
 interface StepAssignWorkspaceProps {
+  workspaces: Workspace[]
   value: string
   onChange: (id: string) => void
 }
 
-export function StepAssignWorkspace({ value, onChange }: StepAssignWorkspaceProps) {
+export function StepAssignWorkspace({
+  workspaces,
+  value,
+  onChange,
+}: StepAssignWorkspaceProps) {
   return (
     <div
       style={{
@@ -42,7 +47,7 @@ export function StepAssignWorkspace({ value, onChange }: StepAssignWorkspaceProp
           gap: "var(--spacing-1)",
         }}
       >
-        {DEMO_WORKSPACES.map((workspace) => (
+        {workspaces.map((workspace) => (
           <WorkspaceCard
             key={workspace.id}
             workspace={workspace}

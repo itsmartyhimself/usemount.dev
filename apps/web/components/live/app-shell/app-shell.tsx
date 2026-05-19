@@ -12,6 +12,13 @@ export interface AppShellInstance {
   workspace: string
   repo: string
   branch: string
+  // Resolved server-side from the route slugs (PR3 / migration-plan Step 3).
+  // Optional + additive so /playground and slug-only callers still type-check.
+  // The component tree / registry that would consume these stays mock until
+  // Step 4.3 — this is the fetch seam, not its consumer.
+  instanceId?: string
+  repoConnectionId?: string
+  manifestCount?: number
 }
 
 export interface AppShellProps {
