@@ -37,12 +37,17 @@ enabled = true
 [auth.external.google]
 enabled = false
 
-# Storage — provisioned in the Step 4.2-prep phase. The hosted private bucket
-# `component-artifacts` was created via the Storage API (service_role key); the
-# Management API has no bucket-create endpoint. This block documents it for
-# local-stack parity (a future `supabase start` seeds the same bucket) and as
-# the durable record of intent — the same pattern [auth] uses for the
-# PR2-PATCHed hosted auth config. It holds the Step-4.2 build worker's output:
+# Storage — provisioned in the Step 4.2-prep phase. CANONICAL SOURCE OF TRUTH
+# is the HOSTED private bucket `component-artifacts`, created + verified via the
+# Storage API with the service_role key (the Management API has no bucket-create
+# endpoint). The [storage.buckets.*] block below is DOCUMENTARY ONLY: the
+# declarative-bucket-seeding key is a recent + CLI-version-dependent Supabase
+# schema, NOT validated here (this repo intentionally keeps config.toml minimal
+# and has no local stack). A future agent setting up `supabase init`/`start`
+# MUST validate the exact key/syntax against the then-current CLI schema before
+# trusting it — do not treat it as canonical. It mirrors the pattern [auth]
+# uses to document the PR2-PATCHed hosted config. The bucket holds the
+# Step-4.2 build worker's output:
 # per-component esbuild JS bundles, keyed by instance, referenced from
 # public.component_manifests.artifact_url. PRIVATE by design — bundles are
 # customer code, served via signed URLs / the 4.3 preview route, never public
