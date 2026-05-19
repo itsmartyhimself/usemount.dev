@@ -806,4 +806,77 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       provisioning + a real customer-codebase spike pass all precede 4.2
       go-live. Org support via (A') when org self-serve is needed.</next>
   </pr>
+
+  <addendum to="4" name="Step 4.0b — real customer-codebase spike pass"
+      branch="feat/migration-step-4.0b" base="staging" date="2026-05-19"
+      verified="spike-live">
+    <secrets-policy>Still hermetic — reads a checked-out tree on disk, no
+      Supabase/Storage/Railway/clone/PAT. Target repo (REV Plugin) is the
+      product owner's own local checkout (github.com/itsmartyhimself/REV-plugin);
+      no credentials touched. Spike output → /tmp/usemount-spike/&lt;label&gt;/
+      (not committed).</secrets-policy>
+
+    <what>Closes the PR4 &lt;next&gt; pre-4.2 blocker "a real customer-codebase
+      spike pass". spike.ts generalized via argv [repoRoot] [componentsRelDir]
+      [tsconfigRelPath] [label] (no args = dogfood, backward-compatible); the
+      one-entry-per-subdir walk became a recursive *.tsx collector (works for
+      flat repos like REV Plugin's components/ui/*.tsx as well as dir-per-
+      component); esbuild alias base + tsconfig now derive from the target;
+      Open-Decision-#1 head-to-head runs dogfood-only (settled in PR4). NOTE the
+      deeper recursive walk re-counts the DOGFOOD as 79 components / 50
+      introspected / 79 bundled / 40.7s — that is a STRICTLY DEEPER measurement
+      than PR4's 41-one-per-dir snapshot, not a contradiction; PR4's 41 numbers
+      stand as that snapshot.</what>
+
+    <rev-plugin-result>Target: REV Plugin (React 19 ✓, TS 5 ✓, but Next 15 ✗
+      &amp; Tailwind v3 ✗ — OUT of the v1 bounded support matrix; it would be
+      refused at connect, which is correct and proves the Step-5 #6 support-gate
+      is load-bearing). The TOOLING is matrix-independent and ran clean: 29
+      components, 29/29 esbuild-bundled (REV's own Radix/lucide/framer deps
+      resolved from its node_modules), 24/29 introspected, 11.6s single-process
+      (rdt + raw+min esbuild), total ~2.95MB min / avg ~102KB, failure-mode
+      histogram clean 13 / no-use-client(rsc?) 10 / limited-introspection 5 /
+      provider-context 2, ZERO build-fail. Decisive: the pipeline is codebase-
+      AGNOSTIC — a completely different external repo (different conventions,
+      flat layout, Radix-based) worked with zero code change beyond argv.</rev-plugin-result>
+
+    <go-no-go>GO for the Step-4 build architecture (architecture-brief §319
+      gate). Per-component cost measured on TWO real codebases ≈ ~0.4s
+      (rdt+raw+min). The "~0.4s × 700 ≈ ~5min first sync" figure is a FERMI
+      estimate, CEILING-UNCERTAIN, NOT comfortably under the §319 5-min
+      threshold: (a) a real 700-component tree has a proportional tail of
+      app-shell-class 1–2MB files, so a linear mean understates first sync;
+      (b) esbuild parallelism was NOT exercised (sequential single-process) —
+      parallelized this is ≪1min, a heavy/exotic tsconfig grows it. What
+      actually makes steady-state safe is the per-component source_hash
+      diff-only rebuild (only changed components rebuild after first sync) — NOT
+      the first-sync number. No worker farm needed for v1; first-sync cost is
+      the only scale risk and it is bounded by diff-only rebuild + optional
+      esbuild parallelism.</go-no-go>
+
+    <new-blockers source="advisor-calibrated">
+      (1) PROP-FILTER HOLE (4.2 design constraint, NOT a customer override
+      case): REV's ui-animate-ui-slot returned 274 props — a customer component
+      re-exporting a Radix Slot type; the node_modules propFilter does NOT catch
+      a *customer-authored* file that re-exports a large base type. Hit 1/29
+      (3.4%) on the FIRST external repo. Persona C will not hand-write 30
+      canvas.config overrides — the 4.2 build worker MUST handle this in-tooling
+      (cap returned-prop count / detect intersection-with-large-base-type /
+      ts-morph fallback for these). Re-plan 4.2 scope must include this BEFORE
+      4.2 ships, not Step-5-after.
+      (2) INTROSPECTION-RATE QUALITY (product-quality finding the owner must
+      hear): 83% (REV) / 63% (deeper dogfood) introspected → ~17–37% of real
+      components render but with an EMPTY controls/properties panel. The product
+      promise survives ("every client component renders") but a meaningful
+      fraction are variant-toggle-less in v1. Step 5 must explicitly own
+      "raise the introspection rate", or v1 ships accepting that fraction.</new-blockers>
+
+    <pre-4.2-checklist>Closed by 4.0b: the real customer-codebase pass. STILL
+      OPEN before 4.2: (i) Supabase Storage provisioning (needs the new
+      session-only Supabase PAT — R2 — request when 4.2 starts, owner deletes
+      after); (ii) R7/R9 coordinated pass (first hosted deploy + GitHub App
+      Setup/Webhook URLs + CORS lock); (iii) the two new advisor-calibrated
+      blockers above folded into 4.2 scope. 4.1+ still NOT started (handoff
+      STOP honoured).</pre-4.2-checklist>
+  </addendum>
 </migration-log>
