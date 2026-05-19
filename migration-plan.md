@@ -442,4 +442,184 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       by the OAuth App secret), so no Supabase update is needed for that
       rotation.</correction>
   </pr>
+
+  <pr id="2" branch="feat/migration-step-2" base="staging" covers="Step 2"
+      status="complete" verified="true" date="2026-05-18">
+
+    <secrets-policy>No secrets recorded in repo. PR2-exposed secrets (OAuth App
+      secret, old GitHub App client secret) were ROTATED by the human in-session;
+      the Supabase PAT used for the migration was deleted. apps/web/.env.local +
+      apps/api/.env.local (gitignored) + Railway vars hold runtime secrets.</secrets-policy>
+
+    <step n="2" name="Auth + Supabase schema/RLS/triggers + staged demo removal">
+      <db>0001_init.sql (10 tables, RLS×10, 3 SECURITY DEFINER fns,
+        on_auth_user_created trigger) authored and APPLIED to hosted DB via
+        Management API POST /database/query. workspace_members policies use
+        is_workspace_member/owner() helpers — non-recursive (RLS-recursion-safe).
+        Verified live: a real GitHub sign-in produced 1 users
+        (github_user_id=259984339), 1 personal workspace, 1 owner member, 1
+        github oauth_identity, FK-consistent. Auth config PATCHed: site_url +
+        uri_allow_list = localhost + Railway web (+ /auth/callback).</db>
+      <types>ComponentManifest* + 10 dashboard types moved to @usemount/shared
+        (manifest.ts/types.ts); old paths are re-export stubs (16 consumers
+        unedited). Node16 → .js extensions in shared src/index.ts. Added
+        @types/react devDep + optional react peer to packages/shared.</types>
+      <web>@supabase/ssr + @supabase/supabase-js added. lib/supabase/
+        {env,client,server,admin}.ts. proxy.ts (Next 16 renamed middleware→proxy,
+        v16.0.0 — verified via build "ƒ Proxy" + per-request log). app/auth/
+        callback/route.ts (exchangeCodeForSession, sanitized next). OAuth in
+        login-screen.tsx (GitHub real; Google "coming soon", R1). Dashboard read
+        path → Supabase: state.tsx + use-recent-repos + use-repo-search + new
+        lib/dashboard/from-rows.ts mapper; nav-avatar server-prefetch. Signatures
+        preserved. ?state= removed; EmptyState data-derived.</web>
+      <demo-D3>Removed only DEMO_USER/DEMO_RECENT_REPOS/DEMO_NOW. DEMO_REPOS,
+        PERSONAL_WORKSPACE, NOW, workspaceForRepo, synthesizeUnpinnedBranches,
+        DEMO_WORKSPACES, DEMO_AVAILABLE_REPOS, DEMO_INSTALLATIONS, ACME_WORKSPACE,
+        SYNTHETIC_* RETAINED — connect-flow + kept-helper consumers; die in
+        PR3/Step 4. demo.ts NOT deleted (migration-plan "delete demo.ts after
+        Step 2" is reinterpreted as the D3 staged path).</demo-D3>
+      <gitignore-fix>.gitignore apps/*/lib/ wrongly ignored apps/web/lib (source);
+        changed to apps/api/lib/ (only api emits build output to lib/). Latent
+        since initial scaffold; surfaced because PR2 added the first new
+        apps/web/lib files.</gitignore-fix>
+    </step>
+
+    <deviations>@supabase/ssr (D1, supabase-js alone can't persist server cookies
+      Next 16). middleware→proxy (Next 16 v16.0.0). B7 executable subset (D3
+      principle preserved; B8#8 grep clean). from-rows.ts added (dedupe row→shape
+      ×3). env.ts literal process.env.NEXT_PUBLIC_* access (Turbopack only inlines
+      literal form; dynamic access throws client-side). members:[] (sole consumer
+      gates on kind==='team', never produced by trigger). config.toml github=true.</deviations>
+
+    <correction-ref>PR1's "one GitHub App = Supabase sign-in provider" identity
+      seam was non-viable (Supabase's stock github provider needs a GitHub OAuth
+      App, not a GitHub App). PR2 created a dedicated GitHub OAuth App for
+      sign-in; the GitHub App usemount-dev is now repo-access only. Seam intact:
+      same numeric GH user id via both. See &lt;correction pr="2"&gt; above.</correction-ref>
+
+    <verification>B8 all green: schema introspection; pnpm shared/api/web builds
+      clean; pnpm dev boots; real GitHub sign-in→callback→session→dashboard;
+      MANDATORY signup-trigger row check; fresh user→EmptyState; hooks resolve
+      []; DEMO_/MOCK_USER grep clean in audited files; RLS non-recursive
+      (structural); /login + dashboard visually identical. Post secret-rotation,
+      sign-in re-verified working (incognito, code→307→/).</verification>
+
+    <next>PR3 (Step 3): apps/api GitHub App backend (install-callback,
+      installations list, repo-connections, repo branches, App-JWT auth helper,
+      webhook lifecycle) + real connect-repo-form. Possibly 0002 migration for
+      pending_installations (validate need first). Then Step 4 (build pipeline).</next>
+
+    <known-risks>Railway hosted deploy of PR2 never run — first staging→main push
+      is the first real hosted exercise of proxy.ts + new env. Google OAuth
+      deferred (R1). Custom-domain coordinated pass still pending (GitHub App URLs
+      + Supabase site_url + Railway NEXT_PUBLIC_API_URL).</known-risks>
+  </pr>
+
+  <pr id="3" branch="feat/migration-step-3" base="staging" covers="Step 3"
+      status="complete" verified="paper-only" date="2026-05-19">
+
+    <secrets-policy>No secrets in repo. apps/api/.env.local (gitignored) +
+      Railway api vars hold GITHUB_APP_* + SUPABASE_*. PR3 added no new required
+      env; GITHUB_APP_SLUG is optional (defaults usemount-dev). State CSRF reuses
+      GITHUB_APP_WEBHOOK_SECRET via a domain-separation prefix — no new secret to
+      provision/rotate. .env.example got the GITHUB_APP_SLUG comment only.</secrets-policy>
+
+    <step n="3" name="GitHub App backend + real connect flow">
+      <api>apps/api (Hono, Node16 → .js internal imports): env.ts (typed
+        accessors), supabase/admin.ts (LAZY memoised service-role client),
+        github/auth.ts (createAppAuth → App-JWT/installation Octokit, no token
+        cache — 1h fresh), lib/require-user.ts (bearer verify via
+        supabaseAdmin.auth.getUser + assertWorkspaceMember/Owner — authz in code
+        since service-role bypasses RLS), lib/state-token.ts (HMAC install-state
+        CSRF). Routes: GET /github/install-url, POST /github/install-callback,
+        GET /github/installations (install-callback.ts); POST /repo-connections
+        (default-pin main+feat/*+release/* as instance rows; Open Decision #4),
+        GET /repo-connections/:id/branches (connections.ts); POST /github/webhook
+        (webhook.ts). Mounted in index.ts; /health stays open.</api>
+      <webhook>HMAC x-hub-signature-256 over RAW body (c.req.text() then
+        JSON.parse), length-checked timingSafeEqual, 401 before parse. Handles
+        installation_repositories.removed / repository.archived /
+        repository.renamed → active=false / org_repo rename (architecture-brief
+        §11's literal 3 events). push→build_jobs is Step 4.</webhook>
+      <web>lib/api/client.ts (bearer-attaching fetch + connectApi). connect-repo-
+        form rewired: real workspaces (Supabase) + repos (installations/
+        install-callback) + first-time "Install GitHub App" CTA + submit → POST
+        /repo-connections → router.push(redirect). app/(dashboard)/connect/
+        callback/route.ts (sanitises GitHub redirect → /connect). step-select-
+        repo / step-assign-workspace on real data. lib/dashboard/use-instance-
+        branches.ts replaces MOCK_INSTANCE in sidebar-header-zone (trail/branch
+        from useParams, branches from api, MOCK fallback off-route).
+        [workspace]/[repo]/[branch]/page.tsx adds the RLS instance fetch +
+        manifest count, threaded via additive optional AppShellInstance fields.</web>
+      <demo-D3>DEMO_AVAILABLE_REPOS + DEMO_INSTALLATIONS removed (PR3 orphaned
+        them). DEMO_REPOS / workspaceForRepo / synthesizeUnpinnedBranches + their
+        transitive deps (PERSONAL_WORKSPACE/ACME_WORKSPACE/DEMO_WORKSPACES/NOW/
+        SYNTHETIC_*) RETAINED — still feed the mock dashboard/sidebar list; die
+        with the registry rewire in Step 4.3. demo.ts header refreshed.</demo-D3>
+    </step>
+
+    <deviations>web→api auth seam = bearer (session.access_token); plan never
+      specified. Literal :userId path param DROPPED (IDOR — user derived from
+      verified token). NO 0002 migration: R3 resolved — the app is auth-gated so
+      the session is the authoritative identity; oauth_identities/account.id
+      match only holds for personal installs (org account.id = org id), so
+      pending_installations solves the wrong problem for v1. useInstanceBranches()
+      takes no repoId + lives in lib/dashboard/ (R8 — migration-plan/ROADMAP
+      apps/web/hooks/ + (repoId) are stale; call site only has slugs). install-
+      callback.ts hosts 3 connect routes + new connections.ts split (plan listed
+      3 filenames; mutation/discovery kept apart). supabaseAdmin is a LAZY
+      factory not an eager const — eager top-level createClient ran during ESM
+      import eval, before index.ts process.loadEnvFile, crashing boot (caught in
+      paper-gate; web admin is also a factory). @octokit/webhooks skipped — node
+      crypto.timingSafeEqual (fewer deps). Octokit auth-app@8/rest@22, supabase-
+      js@2.105.4 (matches web), zod@4; caret + minimumReleaseAge resolved
+      clean. AppShellInstance extended (optional/additive) — fetch seam only,
+      consumer is Step 4.3.</deviations>
+
+    <authz-fixes>Two holes caught by /advisor mid-review, fixed + re-verified:
+      (1) install-callback now verifies a User-type installation's account.id ==
+      users.github_user_id (the migration-plan/PR2 seam — a user-bound state
+      token alone did NOT prove the user owns that installation_id). (2) /repo-
+      connections refuses (409) if the (install,repo) already belongs to another
+      workspace — the UNIQUE excludes workspace_id, so a bare upsert would
+      silently re-home a connection (cross-workspace claim).</authz-fixes>
+
+    <verification>PAPER-ONLY by human decision (no Railway deploy, no hosted
+      webhook — R7/R9 deferred to the custom-domain coordinated pass). Green:
+      shared/api tsc -b; web tsc --noEmit; web next build (/connect, /connect/
+      callback, ƒ Proxy present); apps/api clean boot ({"ok":true}, lazy client,
+      REQUIRED_ENV gate); installations/install-callback/repo-connections w/o
+      bearer → 401; webhook no-sig→401, bad-sig→401, valid-sig+unhandled→200,
+      valid-sig+tampered-body→401 (raw-body bound); state-token valid/tampered/
+      empty/garbage all correct; App-JWT authenticates to real GitHub as
+      usemount-dev/3758221 (PEM+appId env correct). NOT exercised (deferred):
+      hosted webhook delivery, real install→connect→dashboard→branch→uninstall
+      round-trip (needs GitHub App Setup/Webhook URLs = R9 + api reachable = R7).</verification>
+
+    <known-risks>R1 two-app footgun stands (apps/api uses ONLY the GitHub App).
+      R7 Railway api never deploy-verified — first staging→main is its first
+      hosted run of the new routes/proxy. R9 GitHub App Setup URL (→ web /connect/
+      callback) + Webhook URL (→ api /github/webhook) still unset; apps/api
+      cors() is wide-open '*' — tighten with R9. NEW: Org/Enterprise install
+      ownership is UNENFORCED — a signed-in user who learns an org's
+      installation_id can list its repos and first-time-claim an unclaimed
+      (install,repo) into their own workspace (cross-workspace re-home is blocked;
+      first claim is not). Step 4 must gate via GitHub org-membership
+      (session.provider_token /user/memberships or stored OAuth token). NEW:
+      installation event action=deleted (full uninstall) is NOT handled — only
+      installation_repositories.removed; whole-account uninstall leaves
+      connections active=true. Add to the lifecycle handlers before go-live.
+      Pre-existing: branch-with-slash breaks the single [branch] segment
+      (redirect to default branch sidesteps it); slug URL scheme
+      (workspace.name.toLowerCase()/orgRepo half) is non-unique but v1-safe (one
+      personal ws/user, Google deferred); `pnpm lint` (eslint .) fails on
+      nav-avatar.tsx (PR2 file, untouched) because @next/eslint-plugin-next is
+      absent — next build is the real gate, this is environmental not PR3.</known-risks>
+
+    <next>Step 4 (build pipeline — STOP per handoff): 4.0 spike, 4.1 push
+      webhook → build_jobs, 4.2 worker loop, 4.3 registry/AppShell rewire (DEMO_
+      REGISTRY / sidebar-panel-provider / canvas-stage / iframe + the retained
+      demo.ts helpers die here). Address the two NEW known-risks in Step 4.
+      Custom-domain coordinated pass (R9) + first hosted deploy (R7) outstanding.</next>
+  </pr>
 </migration-log>

@@ -3,9 +3,7 @@
 import type { CSSProperties } from "react"
 import { SearchInput } from "@/components/live/search-input"
 import { InstanceBreadcrumb } from "@/components/live/instance-breadcrumb"
-// TODO(ROADMAP: "Sidebar / InstanceBreadcrumb wiring"): replace MOCK_INSTANCE
-// with route-derived data once /[workspace]/[repo]/[branch] exists.
-import { MOCK_INSTANCE } from "@/components/live/instance-breadcrumb/instance-breadcrumb.mocks"
+import { useInstanceBranches } from "@/lib/dashboard/use-instance-branches"
 import {
   SIDEBAR_EASE_OUT_SOFT,
   SIDEBAR_LABEL_EXIT_MS,
@@ -88,10 +86,15 @@ function searchWrapStyle(collapsed: boolean): CSSProperties {
 
 export function SidebarHeaderZone() {
   const { searchQuery, actions, collapsed } = useSidebarPanel()
+  const { data: instanceData, onSwitchBranch } = useInstanceBranches()
 
   return (
     <div style={headerStyle}>
-      <InstanceBreadcrumb data={MOCK_INSTANCE} collapsed={collapsed} />
+      <InstanceBreadcrumb
+        data={instanceData}
+        collapsed={collapsed}
+        onSwitchBranch={onSwitchBranch}
+      />
       <div style={brandWrapStyle(collapsed)}>
         <span role="img" aria-label="Mount" style={glyphStyle} />
       </div>

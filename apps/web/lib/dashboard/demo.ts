@@ -6,9 +6,11 @@ import type {
 } from "./types"
 
 // Staged demo data (D3): the dashboard read path (workspaces / repos / recent
-// / user) is now Supabase-sourced. What remains here is consumed only by the
-// connect flow + kept helpers (workspaceForRepo / synthesizeUnpinnedBranches)
-// and is removed in PR3/Step 4. NOW stays internal — those helpers need it.
+// / user) is Supabase-sourced (PR2) and the connect flow is now real (PR3 —
+// DEMO_AVAILABLE_REPOS / DEMO_INSTALLATIONS removed). What remains is consumed
+// only by the still-mock dashboard/sidebar list (DEMO_REPOS, workspaceForRepo,
+// synthesizeUnpinnedBranches + their deps) and dies with the registry rewire
+// in Step 4.3. NOW stays internal — those helpers need it.
 const NOW = Date.UTC(2026, 4, 11, 14, 0, 0)
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -180,18 +182,6 @@ export const DEMO_REPOS: RepoConnection[] = [
       }),
     ],
   },
-]
-
-export const DEMO_INSTALLATIONS = [
-  { id: "inst-acme", login: "acme", reposCount: 12, primary: true },
-  { id: "inst-jbell", login: "jbell", reposCount: 7, primary: false },
-]
-
-export const DEMO_AVAILABLE_REPOS = [
-  { id: "av-1", orgRepo: "acme/storybook-bridge", alreadyConnected: false },
-  { id: "av-2", orgRepo: "acme/canvas-extras", alreadyConnected: false },
-  { id: "av-3", orgRepo: "acme/components-internal", alreadyConnected: true },
-  { id: "av-4", orgRepo: "acme/docs-site", alreadyConnected: false },
 ]
 
 // TODO: ROADMAP §Dashboard — synthetic unpinned branches reveal client-side. Replace
