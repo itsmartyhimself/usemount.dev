@@ -35,7 +35,7 @@ ComponentManifest = {
 
 The demo Button works because `button.manifest.tsx` declares all of this and `CanvasControlsProvider` reads `controls.*` directly into the variants toggle, size selector, and properties panel. No special wiring per component.
 
-**The build pipeline's entire job** is producing one of these manifests per imported component. If we produce a valid manifest, the canvas already knows what to do. This makes the pipeline scope concrete: TypeScript prop-type introspection (via `react-docgen-typescript` or equivalent) → emit a manifest matching this shape → bundle the component for iframe rendering → store the manifest in Postgres and the bundle in Storage.
+**The build pipeline's entire job** is producing one of these manifests per imported component. If we produce a valid manifest, the canvas already knows what to do. This makes the pipeline scope concrete: TypeScript prop-type introspection (via the **ts-morph checker** — the customer's own tsconfig drives a full type-checker so cross-file / `node_modules` aliases and `forwardRef`/HOC unwrap correctly; `react-docgen-typescript` was the PR4 default but produced ~67% empty-controls panels on real customer repos, so PR6 inverted: checker primary, rdt optional cross-check — see `migration-plan.md`'s `<migration-log>` `<pr id="6">`) → emit a manifest matching this shape → bundle the component for iframe rendering → store the manifest in Postgres and the bundle in Storage.
 
 The demo currently calls `manifest.render(props)` inline in the host bundle. The future iframe pipeline replaces `render` with "post props to the iframe URL stored on the manifest." Same controls schema, different transport.
 
@@ -134,7 +134,7 @@ GitHub App webhook on `push` → webhook handler enqueues a build job → worker
 2. Detects the components dir and globals.css (see "Boundary" below).
 3. Diffs against `last_synced_commit_sha` to find changed component files.
 4. Builds only changed components with esbuild (per-component entry points sharing a deps graph).
-5. Generates manifests from TypeScript prop introspection (`react-docgen-typescript`); honors a `Component.canvas.tsx` override file when present.
+5. Generates manifests from TypeScript prop introspection (ts-morph checker primary; rdt optional cross-check — see §3 above and PR6 in `<migration-log>`); honors a `Component.canvas.tsx` override file when present.
 6. Writes manifests + bundles to Storage + Postgres, updates `last_synced_commit_sha`, fires a Realtime event on the instance channel.
 
 Sidebar leaves and the canvas both render the live component in lazy-mounted iframes — no static images at any layer of the system.
@@ -248,7 +248,7 @@ What Storybook got right and usemount.dev keeps:
 
 What Storybook got wrong and usemount.dev avoids:
 
-- **Story files in the codebase.** `*.stories.tsx` per component is Storybook's single biggest maintenance tax. usemount.dev generates manifests from TypeScript prop introspection. Zero required per-component boilerplate.
+- **Story files in the codebase.** `*.stories.tsx` per component is Storybook's single biggest maintenance tax. usemount.dev generates manifests from TypeScript prop introspection (ts-morph checker — see §3). Zero required per-component boilerplate.
 - **Build pipeline lives in the customer's repo.** Storybook requires maintaining `.storybook/` config, webpack/Vite plugins, addon config. usemount.dev owns the build. Customer just commits.
 - **Static deploys for sharing.** Storybook ships are baked-at-deploy-time HTML; sharing means "the URL of your CI deploy." usemount.dev share links are live and always reflect current branch state.
 - **MDX as a first-class story format.** MDX-as-stories conflated docs and demos. MDX stays for docs only; demos come from the manifest.
@@ -286,7 +286,7 @@ Items that will bite the architecture but aren't covered above:
 - **Fonts and static assets.** Components reference `/public/fonts`, `/public/images`. Build pipeline must ship `public/` along with the bundles. Cheap fix, easy to forget.
 - **Path aliases (`tsconfig.paths`)**. Esbuild needs config to honor `@/components/*` style aliases. Test against the 700-person codebase early — exotic tsconfigs will show up fast.
 - **Component dependencies on app shell context** (theme providers, query client, i18n). A component that requires `<ThemeProvider>` higher up will throw when mounted in isolation. Manifest needs an optional "wrapper" that wraps the component before render. v1 ships a single optional wrapper file (`canvas.providers.tsx` at repo root); v2 supports per-component wrappers.
-- **TypeScript prop introspection has limits.** `react-docgen-typescript` handles most things; it chokes on generic components, complex unions, and types imported from `node_modules`. Plan for a manifest override path (`canvas.config.ts` per component) for the cases it can't infer.
+- **TypeScript prop introspection has limits.** The PR6 ts-morph-checker engine resolves most of what `react-docgen-typescript` couldn't — union literals from `node_modules`, `forwardRef`/HOC unwrapping, cross-file alias chains. Residuals that the checker still can't always express cleanly: unconstrained generic components (the `<T>` itself; its non-T props still resolve), branded/opaque types, and customer-side re-exports of huge base types (a `PROP_CAP` of 40 fires there). Plan for a manifest override path (`Component.canvas.tsx` per component) for those.
 - **Build runtime cost.** A full build of a real DS can be 30-60s and 1-4 GB RAM. Fine for two clients on Railway. At 100 customers, real money. Track `build_duration` on every job from day one so cost-shape data exists before pricing decisions.
 - **Webhook reliability.** GitHub webhooks fail. Build a "stale instance" reconciler — for any active workspace, every N hours, fetch the actual `default_branch` SHA from GitHub and compare to `last_synced_commit_sha`. If diverged, enqueue a build. Cheap insurance.
 - **GitHub App installation lifecycle.** Users uninstall the app, repos get archived, repos get renamed. Webhook handlers for `installation_repositories.removed`, `repository.archived`, `repository.renamed` ship in v1, not later. Otherwise dead repo connections accumulate.
@@ -306,7 +306,7 @@ In rough priority — earlier ones block later ones.
 4. **Source policy**: ephemeral build, no source persisted at rest. Revisit only if rebuild cost forces it.
 5. **Build target detection**: `mount.config.ts` optional; auto-detect with sensible fallbacks; the connect flow surfaces a "we couldn't find a components folder, point us at it" screen if both fail.
 6. **`apps/api` (Hono)**: build worker, webhook handlers, and long-running jobs. Next.js handles short-lived endpoints (auth callbacks, workspace queries, share-link resolution) via route handlers.
-7. **Manifest authoring**: TypeScript prop introspection via `react-docgen-typescript`; no `*.stories.tsx`; optional MDX docs colocated; per-component override file (`Component.canvas.tsx`) only when introspection isn't enough.
+7. **Manifest authoring**: TypeScript prop introspection via the ts-morph checker (PR6 D2 inversion — see §3 + `<migration-log>`); no `*.stories.tsx`; optional MDX docs colocated; per-component override file (`Component.canvas.tsx`) only when introspection isn't enough.
 8. **Sync trigger**: webhook auto-sync + visible "Re-sync now" button + every-N-hours reconciler against actual branch HEAD.
 9. **Workspace model**: personal-by-default, team workspaces explicit, conversion supported, roles in schema but treated as equal in v1 logic (except `owner`), duplicate-repo soft-prompt on team join.
 10. **Instance**: `(repo_connection, branch)` tuple. Branches pinned/unpinned by user. Default-pinned: `main` + glob-matched branches.

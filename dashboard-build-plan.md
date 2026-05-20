@@ -214,7 +214,7 @@ The hard step. In `apps/api`, build a worker that:
 - Clones the repo via GitHub App installation token.
 - Detects the components folder and CSS entry (configurable via `mount.config.ts`, with auto-detect fallback).
 - Runs esbuild on each component file → produces JS bundles.
-- Auto-generates a `ComponentManifest` for each (TypeScript prop introspection via `react-docgen-typescript`).
+- Auto-generates a `ComponentManifest` for each (TypeScript prop introspection via the **ts-morph checker** — primary engine since PR6; rdt stays as optional cross-check, see PR6 in `migration-plan.md`'s `<migration-log>` for the D2 inversion rationale).
 - Uploads manifests + bundles to Supabase Storage.
 - Updates the `instance` row.
 
@@ -305,7 +305,7 @@ Pricing the product itself is out of scope for this doc. Schema includes `worksp
 
 ## Decisions still open before code begins
 
-1. **Auto-manifest spike target**: confirm `react-docgen-typescript` (or alternative like `ts-morph`) handles this repo's own `ButtonProps` plus one real client codebase. Spike runs in step 4 prep.
+1. ~~**Auto-manifest spike target**: confirm `react-docgen-typescript` (or alternative like `ts-morph`) handles this repo's own `ButtonProps` plus one real client codebase. Spike runs in step 4 prep.~~ **CLOSED in PR6 (D2 inversion):** ts-morph checker is primary. Numeric gate (zero `external-union` / `forwardref-unresolved` / `large-base-type` outside the sanctioned Radix-Slot cap) passes on dogfood + REV-Plugin. See PR6 in `migration-plan.md`'s `<migration-log>`.
 2. **Sample repo content**: what lives in the public `usemount.dev/sample-components` repo for the "Try with sample" CTA. Recommend 5–10 well-typed components covering Button, Input, Card, Hero, Modal — variety without bloat.
 3. **Initial CSS support scope**: Tailwind v4 + globals.css for v1, confirmed. Customers using CSS modules / styled-components / vanilla-extract are explicitly out of scope.
 4. **Branch glob defaults**: auto-pin `main`, `feat/*`, `release/*` on first connect, plus user pinning controls. Confirm or adjust.

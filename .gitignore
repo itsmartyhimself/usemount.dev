@@ -5,6 +5,10 @@ packages/*/lib/
 # Only apps/api emits to lib/ (tsc outDir). apps/web/lib is SOURCE — never ignore it.
 apps/api/lib/
 build/
+# apps/api/src/build/ holds the Step-4.2 worker modules — SOURCE, not build
+# output. Generic `build/` catch-all above ignores them by default; un-ignore
+# the worker source directory explicitly.
+!apps/api/src/build/
 coverage/
 *.tsbuildinfo
 next-env.d.ts
