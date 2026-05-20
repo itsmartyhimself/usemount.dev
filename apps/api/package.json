@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "spike": "tsx scripts/spike.ts",
+    "verify:push-webhook": "tsx scripts/verify-push-webhook.ts",
     "build": "tsc -b",
     "start": "node lib/index.js"
   },

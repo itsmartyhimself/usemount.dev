@@ -966,4 +966,182 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       push-webhook + 4.2 build/bundle/manifest-emit/Storage-upload + 4.3 iframe
       runtime + 4.4 realtime), minus everything closed above.</pre-4.2-checklist>
   </addendum>
+
+  <pr id="5" branch="feat/migration-step-4.1" base="staging" covers="Step 4.1"
+      status="complete" verified="builds+harness-live+boot-smoke" date="2026-05-20">
+
+    <secrets-policy>No secrets in repo. A session-only Supabase PAT was supplied
+      by the owner to apply 0002 (Management API only); staged to
+      /tmp/usemount-sb-pat mode-600, never echoed back, never written to any
+      committed file, shredded at hand-back. The owner deletes the PAT in the
+      Supabase dashboard on done-report (R2). Harness writes sentinel rows
+      (github_install_id=999_999_999_991, branches "test/pr5-*") to the live
+      hosted DB and tears them down in a finally block — verified clean after
+      the run (0 leftover_conns, 0 leftover_insts, 0 total build_jobs). The
+      real GITHUB_APP_WEBHOOK_SECRET from apps/api/.env.local is the signing
+      key for the harness payloads; it never leaves the local process.</secrets-policy>
+
+    <decisions>
+      (1) Dedup mechanism = DB-level via 0002 migration's UNIQUE partial index
+      (owner-picked option A; advisor-recommended). Two concurrent identical
+      (instance_id, commit_sha) INSERTs collide on the index — the second
+      yields Postgres unique_violation (SQLSTATE 23505), which apps/api maps to
+      `deduped`. Partial predicate = `status IN ('queued','running')` so a SHA
+      that previously built (succeeded/failed/canceled) can rebuild on a new
+      push. The index protects both the 4.1 write path and 4.2's worker
+      re-enqueue path against duplicates.
+      (2) Rate-limit = in-memory token bucket per `installation_id` (capacity
+      10, refill 0.5/sec → ~30/min sustained, burst of 10). Resets on
+      apps/api restart — accepted v1 footgun (worst case: attacker waits ~120s
+      for a deploy to retry; real fast-pushers fit comfortably under the cap).
+      Multi-replica → swap for Redis-backed counter; the `tryConsume(kind,
+      key, cfg)` shape doesn't change.
+      (3) Test harness = in-process via Hono's `app.request(...)` rather than a
+      spawned subprocess + HTTP. Required a tiny refactor — extracting
+      buildApp() from index.ts to src/app.ts — that's a strict improvement
+      (testability + future integration tests for the 4.2 worker can also
+      import the routed app without binding a port). index.ts still owns env
+      validation + serve(); the .env.local load + REQUIRED_ENV gate are
+      unchanged.
+    </decisions>
+
+    <audit-findings step="0a">Pre-PR5 audit of PR4 + 4.0b + 4.2-prep
+      (paper/local-verified only) re-confirmed sound: webhook.ts raw-body HMAC
+      hashed BEFORE JSON.parse, length-checked timingSafeEqual, 401 before
+      parse, installation.deleted → deactivateAllForInstall; installation-
+      ownership.ts hard-denies Org/Enterprise (account.type !== 'User'),
+      verifies User account.id == users.github_user_id, 404 on stale install
+      ids; the shared helper is called BEFORE listInstallRepos in
+      install-callback.ts AND from connections.ts (closes the first-claim gap);
+      state-token.ts domain-prefixed HMAC + 10-min TTL + 60s skew clamp;
+      supabaseAdmin() is a lazy memoised factory (no eager top-level client);
+      Node16 `.js` extensions everywhere; apps/api/lib gitignored, apps/web/lib
+      NOT (correct); .env.local gitignored. cors() is still wide-open '*' (R9,
+      intentional; do not fix). build-manifest.ts controls schema models only
+      variants/sizes/forms/booleans/slots — cannot express string/number/
+      handler/object → THE PR6-kickoff D1 question (panel-completeness scope).
+      No drift, no holes, audit-clean.</audit-findings>
+
+    <step n="4.1" name="push-webhook → build_jobs">
+      <db>supabase/migrations/0002_build_jobs_dedup.sql — one CREATE UNIQUE
+        INDEX, applied to the hosted DB via Management API POST
+        /projects/agyiylncvchzifuzvnew/database/query (Bearer PAT). Verified
+        live via pg_indexes: indexname=build_jobs_active_dedup_idx, definition
+        CREATE UNIQUE INDEX ... USING btree (instance_id, commit_sha) WHERE
+        (status = ANY (ARRAY['queued'::build_status, 'running'::build_status])).
+        build_jobs was empty (0 rows) before apply so the migration ran with no
+        data-prep work needed.</db>
+      <code>
+        New: apps/api/src/lib/rate-limit.ts (token bucket — generic over kind+
+        key, test hook accepts a deterministic `nowMs`, exports
+        `resetAllBuckets()` for the harness). New: apps/api/src/github/
+        push-enqueue.ts (`enqueuePushBuilds(payload)` — branch-ref-only,
+        deleted/zero-SHA skip, repo+install sanity match, fan-out over active
+        repo_connections, pinned-only enqueue, 23505 → `deduped`, returns a
+        discriminated PushEnqueueOutcome union per touched instance). New:
+        apps/api/src/app.ts (extracted `buildApp()` for in-process tests).
+        Modified: apps/api/src/github/webhook.ts (push branch after lifecycle
+        dispatch; payload type widened with ref/before/after/deleted; logging is
+        best-effort — deduped + non-anomalous skips silent). Modified:
+        apps/api/src/index.ts (uses buildApp; env validation + serve unchanged).
+        New: apps/api/scripts/verify-push-webhook.ts + pnpm script
+        `verify:push-webhook`. Push event handling needs NO GitHub App config
+        change (push is auto-delivered like installation_*; not a phantom R9
+        item).
+      </code>
+      <skip-conditions>Handler returns 200 (no insert) on: non-branch ref
+        (refs/tags/* etc.); empty branch after stripping; deleted=true OR
+        all-zero `after` SHA; `after` length &lt; 7; missing repo.id or
+        installation.id; rate-limit token exhausted; no active repo_connection
+        matching BOTH (github_repo_id, github_install_id) (mismatch between
+        payload's install and repo is a payload anomaly — skip, do not
+        first-claim); no `instances` row for (repo_connection_id, branch)
+        — unpinned/untracked; instance.pinned === false (architecture-brief
+        §225: only pinned auto-rebuilds on push); dedup hit (23505). Branch-
+        with-slash is handled transparently — `refs/heads/feat/x` strips to
+        `feat/x` and matches the instances row verbatim.</skip-conditions>
+    </step>
+
+    <deviations>buildApp extracted to src/app.ts (handoff bible didn't
+      prescribe a layout — kept the refactor minimal and reversible). Token-
+      bucket helper lives in `lib/`, not `github/`, because it's domain-neutral
+      and the 4.2 worker (and any future inbound surface) can reuse it.
+      `enqueuePushBuilds` returns an array of outcomes (one per matched
+      connection) rather than a single result — `UNIQUE(github_install_id,
+      github_repo_id)` allows at most one match today, but the array shape is
+      forward-compatible for any future per-workspace connections without an
+      API change. Push event payload type was merged into the existing local
+      type in webhook.ts (all fields optional) rather than narrowing per-event
+      — keeps the dispatch readable and the parse path single.</deviations>
+
+    <verification>Builds GREEN: @usemount/shared tsc -b, @usemount/api tsc -b,
+      @usemount/web tsc --noEmit + `next build` (9 routes, ƒ Proxy intact).
+      Harness LIVE-exercised — all 12 cases PASS:
+      (1) bad sig → 401, no DB mutation;
+      (2) no sig → 401;
+      (3) tag push (refs/tags/v1.0.0) → 200, 0 rows;
+      (4) branch delete (deleted=true) → 200, 0 rows;
+      (5) zero-SHA after → 200, 0 rows;
+      (6) unknown repo → 200, 0 rows;
+      (7) mismatched install_id → 200, 0 rows;
+      (8) unpinned branch → 200, 0 rows on the unpinned instance;
+      (9) happy path (pinned, SHA_A) → 200, exactly 1 build_jobs row;
+      (10) duplicate push (same instance,sha) → 200, still 1 row (dedup
+      via 23505 confirmed);
+      (11) different SHA on same instance → 200, 2 total rows;
+      (12) flood of 18 distinct SHAs against the same installation_id, FIRED
+      VIA Promise.all so wall-clock latency stops dominating the inter-call gap
+      (advisor: sequential `await` made the cap=10 assertion timing-flaky on
+      slower machines via accidental refill across DB round-trips; bursts are
+      the actual threat model) → exactly 10 enqueued, 8 rate-limited (token
+      bucket capacity=10 exhausted, 0 DB writes from the rate-limited 8).
+      Post-run hosted DB check via Management API: leftover_conns=0,
+      leftover_insts=0, total build_jobs=0 — teardown verified clean. PORT-BOOT
+      SMOKE (advisor: covers the buildApp/serve refactor delta the in-process
+      harness skips): PORT=4001 `tsx src/index.ts` → stdout
+      "usemount.dev API running on port 4001"; curl 127.0.0.1:4001/health →
+      {"ok":true} HTTP 200; kill clean. NOT exercised (deferred, R7/R9): hosted
+      webhook delivery from real GitHub, Railway deploy, real push round-trip
+      end-to-end.</verification>
+
+    <known-risks>R7 apps/api never deploy-verified — first staging→main is its
+      first hosted run; the new push branch fires automatically once GitHub
+      reaches apps/api with the right Webhook URL. R9 cors('*') untouched +
+      GitHub App Setup/Webhook URLs unset (Setup → web /connect/callback,
+      Webhook → api /github/webhook). No new App event subscription needed
+      (push is auto-delivered to every App). R2 the PAT used to apply 0002
+      must be deleted in the Supabase dashboard by the owner now. Rate-limit
+      reset-on-restart is v1-accepted (single Railway replica); the in-memory
+      `Map<installation_id, Bucket>` also never evicts, so distinct install ids
+      grow it forever — negligible at v1 scale, swap for a Redis/Postgres-
+      backed counter alongside the reset-on-restart upgrade if multi-replica.
+      The 0002
+      partial index dedup window is `queued`/`running` only — a job that
+      finishes (succeeded/failed/canceled) frees the (instance,sha) for
+      re-enqueue, which is correct for fault recovery but means a force-push
+      to the same SHA after a prior build will rebuild; acceptable. Pre-
+      existing unchanged: `[branch]` vs `[...branch]` slug routing (PR3); slug
+      scheme non-unique (v1-safe); `pnpm lint` fails on PR2's nav-avatar.tsx
+      (missing @next/eslint-plugin-next) — `next build` is the real gate.</known-risks>
+
+    <next>PR6 (Step 4.2): the build worker. STOPS here per handoff; PR6 starts
+      with the ask-user-question kickoff on D1 (panel-completeness scope —
+      controls schema expansion vs typed read-only rows vs resolution-only
+      gate; defines "done" and sizes the PR), then evolves apps/api/scripts/
+      spike.ts to checker-primary, iterates until the gap histogram hits zero
+      `external-union`/`forwardref-unresolved`/`large-base-type` on dogfood AND
+      a real-customer-codebase fresh-clone-from-GitHub run, THEN lifts the
+      working logic into apps/api/src/build/worker.ts with the lease loop +
+      heartbeat + ephemeral tmpfs clone + `--ignore-scripts` dependency install
+      + cached node_modules on a persistent volume + ts-morph static-parse of
+      mount.config.ts (RCE — never import()/eval) + per-component esbuild with
+      tsconfig path inheritance + CSS extraction validated on a Tailwind-v4
+      target + Supabase Storage upload + component_manifests UPSERT/DELETE +
+      per-component-failure ≠ job-failure semantics. Doc inversion (decision
+      D2 from the handoff) lands in PR6: architecture-brief §3 + §287, dashboard-
+      build-plan Step 4, migration-plan Step 4.2, spike.ts's FINDING comment
+      all flip "rdt primary" → "checker-backed primary, rdt optional cross-
+      check". 4.3/4.4 + Step 5 + R7/R9 hosted cutover all remain explicitly OUT
+      of scope of PR6.</next>
+  </pr>
 </migration-log>
