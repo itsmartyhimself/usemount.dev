@@ -132,13 +132,14 @@ Per-job worker:
 6. Upload bundles to Supabase Storage; insert/update `component_manifests` rows with artifact URL + `source_hash`.
 7. Update `instances.last_synced_commit_sha` and `last_synced_at`. Destroy sandbox.
 
-**Step 4.3 — Iframe runtime + canvas wiring + sandbox hardening**:
-1. New `apps/web/app/preview/[manifestId]/route.ts` — serves a minimal HTML doc that mounts the bundle and supplies router + theme defaults per architecture brief §3.
-2. **Iframe sandboxing is mandatory at this step, not later** (per `apps/web/ROADMAP.md` §Component rendering). The iframe element gets `sandbox="allow-scripts"` (no `allow-same-origin`). Response sets a strict CSP: `default-src 'none'; script-src 'self' <storage-domain>; style-src 'self' 'unsafe-inline'; connect-src 'none'; frame-ancestors 'self'`. Without this, a malicious customer component can reach host cookies/storage.
-3. Replace `manifest.render(props)` in canvas/stage with iframe mount: load `<iframe src={...} sandbox="allow-scripts">`, send props via `postMessage` over a narrow protocol (typed message kinds: `init`, `setProps`, `error`, `ready`). Existing `controls` schema drives the same variants/sizes/booleans panel.
-4. Replace `apps/web/components/live/sidebar-panel/sidebar-panel-provider.tsx` `DEMO_REGISTRY` source with Supabase query keyed on `instance_id`. Hook keeps its signature.
-5. Append a `component_views` row each time a manifest mounts (the day-one telemetry from Step 2).
-6. Delete `apps/web/lib/registry/data.ts` once provider reads real data.
+**Step 4.3 — Iframe runtime + canvas wiring + sandbox hardening** (PR7-closed; D1=same-origin v1 + R9 cleanup, D2=delete `ComponentManifest<P>.render`, D3=15-min signed-URL TTL — see `<pr id="7">` in `<migration-log>` for the full delivery):
+1. New `apps/web/app/preview/[manifestId]/route.ts` — serves a minimal HTML doc that mounts the bundle and supplies router + theme defaults per architecture brief §3. Strict CSP via response header with a per-request nonce on the inline importmap + bootstrap script (`script-src` is nonce-gated, no `'unsafe-inline'`).
+2. **Iframe sandboxing is mandatory at this step, not later** (per `apps/web/ROADMAP.md` §Component rendering). The iframe element gets `sandbox="allow-scripts"` (no `allow-same-origin`). Response sets a strict CSP: `default-src 'none'; script-src 'self' 'nonce-<n>' https://<storage-host>; style-src 'self' 'unsafe-inline' https://<storage-host>; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'`. Without this, a malicious customer component can reach host cookies/storage.
+3. Replace `manifest.render(props)` in canvas/stage with iframe mount: `<IframeMount manifestId=... instanceId=... props=... />` element with `sandbox="allow-scripts"`, send props via versioned `postMessage` over a narrow protocol (typed message kinds: `init`, `setProps`, `ready`, `resize`, `error` — `packages/shared/src/iframe-protocol.ts`). Existing `controls` schema drives the variants/sizes/forms/booleans/slots panel; PR7 adds strings/numbers/handlers/objects row renderers per PR6 D1.
+4. Replace `apps/web/components/live/sidebar-panel/sidebar-panel-provider.tsx` `DEMO_REGISTRY` source with a server-side Supabase query keyed on `instance_id` (`apps/web/lib/registry/from-supabase.ts` — produces both the sidebar tree shape and the per-leaf manifest map in one round-trip).
+5. Append a `component_views` row each time a manifest mounts (the day-one telemetry from Step 2). RLS-gated by the existing `is_workspace_member` policy on `component_views.cv_ins`.
+6. Delete `apps/web/lib/registry/data.ts` (DEMO_REGISTRY) + `manifests.ts` (buttonManifest) + `manifest-types.ts` (the re-export stub — D2 collapses ComponentManifest into `extends BuildManifest`, `render` field dropped) + `components/live/button/button.manifest.tsx`.
+7. Self-host React as ESM in `apps/web/public/preview-runtime/{react,react-dom,react-dom-client,react-jsx-runtime}.mjs` (built by `apps/api/scripts/build-preview-runtime.ts`); the iframe's importmap aliases the externals PR6's `bundle.ts` leaves unresolved.
 
 **Step 4.4 — Realtime stale-viewer**:
 1. Replace `apps/web/components/live/app-shell/stale-viewer-trigger.tsx`'s 30s `setTimeout` with `supabase.channel('instance:${id}').on('postgres_changes', { table: 'instances', filter: 'id=eq.${id}' })` listening for `last_synced_commit_sha` changes.
@@ -1576,6 +1577,564 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       Before PR7: confirm PAT was deleted in Supabase dashboard; if a 0004+
       migration or Storage RLS policy is needed there, request a fresh
       session-only PAT (triple-precedent + advisor pattern).
+    </next>
+  </pr>
+
+  <pr id="7" branch="feat/migration-step-4.3" base="staging" covers="Step 4.3"
+      verified="builds+harness-live+no-regression+boot-smoke" date="2026-05-20">
+    <secrets-policy>No secrets in repo. A session-only Supabase PAT was
+      supplied by the owner at PR7 kickoff to re-verify the PR6 0003 RPC
+      privileges + confirm `component_views` / `component_manifests` shape +
+      probe the `component-artifacts` bucket — Management API only; staged
+      to /tmp/usemount-sb-pat mode-600, never echoed back, never written to
+      any committed file, shredded at hand-back. PR7 introduces no new
+      SECURITY DEFINER functions and no new migrations, so the live DB
+      footprint from this PR is just sentinel rows the verify-iframe harness
+      writes + deletes inside a finally block (TEST_INSTALL_ID=
+      999_999_999_971, branch "test/pr7-iframe"). Storage objects the
+      sentinel uploads to component-artifacts are removed in the same
+      teardown; verified clean post-run (leftover_conns=0,
+      leftover_storage=0).</secrets-policy>
+
+    <decisions>
+      <decision id="D1" name="iframe separate-origin" answer="same-origin v1 + R9 cleanup">
+        Owner-chosen at PR7 kickoff via ask-user-question skill. The iframe
+        is served from `/preview/[manifestId]` on the dashboard host;
+        `sandbox="allow-scripts"` WITHOUT `allow-same-origin` already gives
+        opaque-origin semantics (host cookies/storage/DOM unreachable from
+        the iframe's JS, parent.document access throws SecurityError,
+        localStorage scoped to the iframe's opaque origin). Cross-origin is
+        a defense-in-depth multiplier — deferred to the R9 coordinated
+        cutover where the `preview.usemount.dev` subdomain is created
+        alongside Railway URLs / GitHub App URLs / CORS lock. Documented as
+        a known v1 limit in known-risks; the route handler is identical
+        either way (only hostname binding differs).
+      </decision>
+      <decision id="D2" name="ComponentManifest.render disposition" answer="delete render field">
+        Owner-chosen. The render-side `ComponentManifest<P>` (in
+        packages/shared/src/manifest.ts) carried `render: (props) =>
+        ReactNode` from the demo era — an in-host inline-render concept the
+        4.3 iframe pipeline supersedes. PR7 collapses the manifest duality
+        the PR4 spike surfaced (PR6 build-side comment in build-manifest.ts):
+        ComponentManifest now `extends BuildManifest` with `id` (DB row
+        uuid), `instanceId` (for component_views inserts), and
+        `defaultProps` (synthesized client-side from `controls` via
+        `packages/shared/src/synthesize-defaults.ts` — first option for
+        variants/sizes/forms, `false` for booleans, `""` for strings, `0`
+        for numbers; handlers/slots/objects left undefined so customer
+        component default parameters take over). One shape, one source of
+        truth: the `component_manifests` row IS the canvas manifest.
+      </decision>
+      <decision id="D3" name="signed-URL TTL" answer="15 min">
+        Standard for ephemeral build artifacts. Long enough for slow
+        connections to fetch the bundle + CSS; short enough that a leaked
+        URL ages out within one viewing session. Implemented via
+        `supabase.storage.from('component-artifacts').createSignedUrl(path,
+        15*60)` from server-side admin client (`apps/web/lib/storage/
+        signed-url.ts`). Browser never sees service-role.
+      </decision>
+      <decision id="export-discovery" name="bundle component lookup" answer="heuristic in iframe">
+        PR6's worker writes `title: slug` (path-derived hyphen-name, e.g.
+        `button-button`), not the customer's PascalCase export name. The
+        iframe bootstrap discovers the component via heuristic:
+        `mod.default` first, else first PascalCase function in
+        `Object.entries(mod)`. Order matches PR6's `introspectComponent`
+        which picks the first PascalCase from `getExportedDeclarations()`,
+        and esbuild's `format: 'esm'` preserves export names through
+        minification. Zero PR6 module touches. Step 5 hardens via
+        `entryExportName` in BuildManifest if non-PascalCase patterns
+        emerge — documented in known-risks.
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Pre-PR7 audit of PR6 (Explore agent + Management API verification with
+      session-only PAT) returned 15/15 PASS. Concretely re-confirmed live:
+      - `apps/api/src/build/worker.ts`: shuttingDown flag + natural loop
+        return, heartbeat setInterval stored + clearInterval in finally,
+        orphan sweep at startup, per-component fail ≠ job fail,
+        build_status='succeeded' (NOT 'synced' — the advisor-caught enum
+        bug at PR6 done-gate). All present.
+      - `apps/api/src/build/introspect.ts`: classifyPropKind order correct
+        (react-node FIRST, handler before object, primitives on
+        getNonNullableType, union-of-literals via getUnionTypes +
+        getLiteralValue, complex union/intersection → typed object). PROP_
+        CAP=40 exported. introspectComponent/deriveControls/classifyGap all
+        exported.
+      - `apps/api/src/build/mount-config.ts`: static AST only (no
+        import()/eval), ALLOWED_KEYS = {componentsDir, globalsCss, hidden},
+        CallExpression/Identifier/spread/computed/unknown-key all rejected.
+      - `apps/api/src/build/bundle.ts`: uses `tsconfig: opts.tsconfigPath`
+        (not the spike's `alias:{'@':...}` shortcut). external React+JSX-
+        runtime confirmed.
+      - `apps/api/src/build/lease.ts`: leaseNextJob uses RPC; heartbeat is
+        plain PostgREST UPDATE gated on (id, worker_id, status='running').
+      - `apps/api/src/index.ts`: startWorkerLoop alongside serve;
+        process.once SIGTERM/SIGINT (single source); DISABLE_BUILD_WORKER
+        opt-out wired.
+      - `packages/shared/src/build-manifest.ts`: D1 hybrid expansion intact
+        (9 row kinds — variants/sizes/forms/booleans/slots/strings/numbers/
+        handlers/objects).
+      - 0003 RPC LIVE via Management API: `prosecdef=true`,
+        `proconfig=['search_path=public, pg_temp']`, args='p_worker_id
+        text', ret='SETOF build_jobs'. ACL via pg_proc.proacl =
+        `{postgres=X/postgres,service_role=X/postgres}` — service_role is
+        the ONLY non-postgres grant; PUBLIC absent (REVOKE effective).
+        has_function_privilege: service=true, anon=false, auth=false.
+      - 0002 partial UNIQUE index live: `WHERE status IN
+        ('queued','running')` (4 indexes on build_jobs total).
+      - `build_status` enum live = `{queued, running, succeeded, failed,
+        canceled}` — confirms PR6's 'synced'→'succeeded' fix sticks.
+      - `component-artifacts` bucket present, private, 50 MiB/object. List
+        prefix returns [] (no real builds yet — R7/R9 deferred).
+      - `.gitignore` `!apps/api/src/build/` negation present.
+      No drift, no holes, audit-clean. PAT used Management-API only and
+      shredded at hand-back.
+    </audit-findings>
+
+    <step-4.3 title="iframe runtime + canvas rewire">
+      <db>
+        No migrations applied in PR7. PR6's `component_manifests` shape
+        (id, instance_id, slug, folder_path, title, kind, variants_json,
+        states_json, props_schema_json, artifact_url, source_hash,
+        created_at, updated_at) and `component_views` shape (id, instance_id,
+        manifest_id nullable, viewer_user_id nullable, viewed_at default
+        now()) already cover Step 4.3. Existing RLS policies (cm_sel,
+        cv_ins/cv_sel via `is_workspace_member()`) gate the route handler's
+        manifest fetch and the IframeMount telemetry insert respectively;
+        no 0004 needed because the iframe reads via signed Storage URLs
+        (service-role signs server-side, browser sees only the signed URL).
+      </db>
+      <code>
+        NEW packages/shared/src/iframe-protocol.ts — versioned typed
+        postMessage protocol. HostToIframe = init|setProps (props payload
+        validated as object). IframeToHost = ready|resize|error (bbox
+        validated as {width, height} finite non-negative numbers; error
+        message validated as string). Both sides validate `v ===
+        IFRAME_PROTOCOL_VERSION` (== 1) on every receive. Type guards
+        isHostToIframe / isIframeToHost; harness exercises 13 positive +
+        negative cases.
+
+        NEW packages/shared/src/synthesize-defaults.ts — synthesizeDefaultProps
+        derives a Record&lt;string, unknown&gt; from BuildManifestControls
+        (D2 collapse needs it because the worker never emitted default
+        VALUES — only TYPES). first option for variants/sizes/forms; false
+        for booleans; "" for strings; 0 for numbers; handlers/slots/objects
+        left undefined so customer component default parameter values take
+        over.
+
+        MOD packages/shared/src/manifest.ts — ComponentManifest no longer
+        generic; now `extends BuildManifest` with id + instanceId +
+        defaultProps. `render` field DELETED (D2). AnyComponentManifest
+        becomes a plain alias for ComponentManifest.
+
+        MOD packages/shared/src/index.ts — re-exports the two new modules.
+
+        NEW apps/web/lib/registry/from-supabase.ts — server-side
+        `fetchInstanceRegistry(supabase, instanceId)` returns
+        `{registry: Registry, manifests: Map&lt;id, ComponentManifest&gt;}`.
+        Builds the sidebar tree from each row's `folder_path` (one folder
+        per unique parent path, alphabetical), maps the rows into
+        ComponentManifest objects with synthesized defaults. Tolerates
+        partial / missing variants_json with an EMPTY_CONTROLS fallback so
+        a degraded row never crashes the canvas.
+
+        NEW apps/web/lib/storage/signed-url.ts — server-only (import
+        "server-only" guards client import). `signStoragePath(path)` calls
+        admin client `createSignedUrl(path, 15*60)`. `signGlobalsCss(instanceId)`
+        lists the bucket prefix sorted by updated_at desc, picks the first
+        `globals.&lt;hash&gt;.css` match (the hash isn't persisted to a DB
+        column so the worker overwrites with hash-pinned keys; the route
+        finds the freshest). One extra Storage roundtrip per /preview hit
+        — v1 acceptable.
+
+        NEW apps/web/lib/preview/iframe-html.ts — pure helpers factored
+        out so the verify-iframe harness can assert on the CSP string and
+        HTML shape without spinning up the Next runtime. `buildCsp(nonce,
+        storageHost)` returns the strict CSP; `renderIframeHtml(opts)`
+        produces the full HTML doc with nonce-protected importmap +
+        bootstrap; `renderErrorHtml(message)` produces the 4xx body.
+
+        NEW apps/web/app/preview/[manifestId]/route.ts — GET handler.
+        Validates manifestId is a UUID; fetches the row via the server
+        client (RLS gates non-members of the workspace); refuses
+        kind=maybe-rsc / kind=unsupported / null artifact_url with
+        renderErrorHtml; signs the JS bundle + (optional) per-component
+        CSS + (best-effort) globals.css via the signed-url helper; emits
+        the iframe HTML with per-request 16-byte base64 nonce. Response
+        headers: content-security-policy, cache-control (private, just
+        under TTL), x-content-type-options nosniff, x-frame-options
+        SAMEORIGIN, referrer-policy no-referrer. Iframe bootstrap (inside
+        renderIframeHtml) listens for postMessage, validates source ===
+        window.parent + message shape, dynamic-imports the bundle, picks
+        the component via heuristic (default → first PascalCase function),
+        mounts into #root via createRoot, posts ready (bbox) then waits
+        for init, then setProps on subsequent host updates. ResizeObserver
+        on #root posts `resize` on non-zero bbox change. window.error +
+        unhandledrejection forwarded as `error` postMessages.
+
+        NEW apps/api/scripts/build-preview-runtime.ts — one-shot esbuild
+        of `react` + `react-dom` + `react-dom/client` + `react/jsx-runtime`
+        into `apps/web/public/preview-runtime/*.mjs` (4 files, 208 KB
+        total minified). `absWorkingDir: apps/web` so esbuild resolves
+        from the web app's node_modules (apps/api has no React dep).
+        Idempotent; re-run when bumping React. Artifacts checked into the
+        repo so the deploy doesn't depend on postinstall scripts.
+
+        NEW apps/web/public/preview-runtime/{react,react-dom,
+        react-dom-client,react-jsx-runtime}.mjs — built artifacts;
+        production React 19 ESM.
+
+        NEW apps/web/components/live/iframe-mount/iframe-mount.tsx — the
+        host-side React wrapper. Props: manifestId, instanceId, props,
+        title, onBbox, onError. Renders `&lt;iframe sandbox="allow-scripts"
+        scrolling="no"&gt;` sized from the iframe's reported bbox (initial
+        1x1; non-zero ready/resize sizes it). Validates incoming
+        postMessages via `isIframeToHost` + event.source === iframe.
+        contentWindow; never reads anything else from the message.
+        Telemetry: one `component_views` insert per mount via the browser
+        Supabase client (RLS-gated; failures logged in dev, never
+        surfaced).
+
+        NEW apps/web/components/live/iframe-mount/index.ts — barrel.
+
+        NEW apps/api/scripts/verify-iframe.ts — 38-case in-process harness
+        (mirrors PR5/PR6 patterns). Sentinel ids: TEST_INSTALL_ID=999_999_
+        999_971, repo_id 999_999_999_972, branch "test/pr7-iframe". Cases:
+        (a) 13 protocol type-guard cases (positive + negative for all 5
+        message kinds); (b) 10 synthesize-defaults cases (empty + every D1
+        row kind matrix); (c) 10 Storage sign+HEAD cases (JS, CSS, globals
+        list+sign+HEAD, ACAO header presence, missing-key error); (d) 5 DB
+        sentinel cases (manifest insert/select via service-role + all 9 D1
+        rows round-trip + component_views insert). Teardown removes
+        Storage objects + cascades via repo_connections delete. 38/38 PASS;
+        leftover_conns=0, leftover_storage=0.
+
+        MOD apps/web/components/live/sidebar-panel/sidebar-panel-provider.tsx —
+        SidebarPanelProvider accepts `initialRegistry?: Registry` +
+        `initialManifests?: Map&lt;string, ComponentManifest&gt;` props
+        (both default to empty-but-valid shapes so legacy /playground
+        mounts still render). DEMO_REGISTRY import removed. Context value
+        gains `manifests` for the canvas-controls bridge.
+
+        MOD apps/web/components/live/sidebar-panel/index.ts — exports
+        useSidebarPanelContext from the barrel (the canvas chain now
+        imports it).
+
+        MOD apps/web/components/live/canvas-controls/canvas-controls-context.tsx —
+        reads the manifest map from useSidebarPanelContext (replacing the
+        demo `getManifest()` lookup against MANIFESTS in lib/registry/
+        manifests.ts). manifest.defaultProps drives the initial props
+        state + reset target.
+
+        MOD apps/web/components/live/canvas-controls/properties-panel.tsx —
+        renders 4 new D1 row kinds (strings → text input, numbers → number
+        input, handlers → typed read-only signature row, objects → typed
+        read-only typeString row). Existing 5 row kinds (variants/sizes/
+        forms/booleans/slots) unchanged in look. Helpers `PropRow`,
+        `TextInput`, `NumberInput`, `TypeBadge`, `labelOf`, `toNumber`
+        added to keep the rendering tidy. Dropped now-redundant optional
+        chains on `controls.booleans?` / `controls.slots?` (the
+        BuildManifestControls fields are required arrays).
+
+        MOD apps/web/components/live/app-shell/app-shell.tsx — accepts
+        `initialRegistry` + `initialManifests`, threads them into
+        SidebarPanelProvider. instance prop unchanged.
+
+        MOD apps/web/components/live/app-shell/canvas-stage.tsx — reads
+        the registry from useSidebarPanelContext (replacing DEMO_REGISTRY).
+        selectedId-to-leaf resolution otherwise identical.
+
+        MOD apps/web/components/live/app-shell/stage-content.tsx —
+        manifest.render(props) at the old :127 callsite replaced with the
+        IframeMount component (gated on manifest.kind === "component" AND
+        manifest.artifactUrl). kind=maybe-rsc renders a "Server component
+        — not supported" tile inline (architecture-brief §3 failure mode
+        1); kind=unsupported / null artifactUrl renders a "Couldn't
+        initialize" tile. ResizeObserver replaced with the iframe's
+        postMessage bbox flow via `onIframeBbox` callback (first non-zero
+        bbox = setContentBbox, subsequent = updateContentBboxBounds).
+
+        MOD apps/web/app/[workspace]/[repo]/[branch]/page.tsx — after the
+        existing best-effort instance resolution, calls
+        fetchInstanceRegistry to pre-fetch the sidebar tree + manifest
+        map server-side; threads both into AppShell. Empty registry on
+        resolution failure (degrades to "no components yet" rather than
+        throwing).
+
+        MOD apps/web/app/playground/specimens/team-switcher-specimens.tsx —
+        the only remaining DEMO_REGISTRY/DEMO_TEAMS_MULTI consumer; the
+        couple of Team rows it needs are inlined into the specimen file so
+        the demo data file can be deleted cleanly.
+
+        MOD apps/api/package.json — added `verify:iframe` +
+        `build:preview-runtime` script targets. No new deps (esbuild + tsx
+        already devDeps from PR4/PR6).
+
+        MOD migration-plan.md — Step 4.3 prose updated to flag PR7 closure
+        + D1/D2/D3 outcomes (this entry recording the full delivery).
+
+        DELETED apps/web/lib/registry/data.ts (DEMO_REGISTRY); apps/web/lib/
+        registry/manifests.ts (buttonManifest + getManifest); apps/web/lib/
+        registry/manifest-types.ts (re-export stub no longer needed —
+        canvas chain imports types directly from @usemount/shared);
+        apps/web/components/live/button/button.manifest.tsx (the demo
+        manifest — the live Button component on the canvas now comes from
+        the iframe).
+      </code>
+    </step-4.3>
+
+    <deviations>
+      - Bundle export discovery is HEURISTIC in the iframe (mod.default
+        then first PascalCase function), not a deterministic `mod[title]`
+        lookup. PR6's worker persists `title: slug` (path-derived
+        hyphen-name), not the customer's PascalCase export name. The
+        advisor flagged three options: (a) heuristic walk, (b) add
+        entryExportName + 0004 migration, (c) modify PR6's bundle.ts to
+        re-wrap entry as default. PR7 picks (a) — zero PR6 module touches,
+        v1 works for dogfood + REV-Plugin. Documented in known-risks for
+        Step 5 hardening.
+      - globals.css Storage key resolution at route-handler time via
+        `storage.from(...).list(`${instanceId}/`)` sorted by updated_at
+        desc, picking the first `globals.&lt;hash&gt;.css` match. The
+        worker emits `${instanceId}/globals.&lt;hash&gt;.css` but the hash
+        isn't persisted to a DB column. Listing adds one extra Storage
+        roundtrip per /preview hit (~tens of ms). The migration-plan.md
+        spec didn't prescribe this seam; v1 acceptable.
+      - `JSON.stringify` results interpolated into `<script>` bodies
+        (importmap + BUNDLE_URL) run through `jsonForScript()` which
+        post-processes `<` → `<`. `JSON.stringify` doesn't escape
+        `<` natively, so a signed Storage URL containing `</script>` —
+        unlikely but not impossible — would close the host script tag
+        early. Standard JSON-in-HTML pattern; defensive at the crown-
+        jewel surface.
+      - Iframe bootstrap is constructed in `apps/web/lib/preview/
+        iframe-html.ts` as a template literal in the route. The handoff
+        recommended `apps/web/lib/registry/from-supabase.ts` (registry
+        side) and a separate concern for the route HTML. PR7 puts pure
+        HTML/CSP helpers in `apps/web/lib/preview/iframe-html.ts` so the
+        harness can assert on shape without spinning up Next. Trivial
+        path-naming deviation; clean separation.
+      - Self-hosted React ESM build script lives in `apps/api/scripts/`
+        (not `apps/web/scripts/`) — apps/api already has esbuild + tsx as
+        devDeps; adding them to apps/web would be net-new manifest entries
+        for a script that runs once per React bump. `absWorkingDir:
+        apps/web` so esbuild resolves react from the web app's
+        node_modules. Outputs land in `apps/web/public/preview-runtime/`.
+      - `react-dom` (top-level) added to the importmap + build alongside
+        `react-dom/client`. The PR6 bundle externalizes `react-dom` even
+        though most React 19 client code uses `react-dom/client`;
+        belt-and-braces shipping both lets customer components that use
+        `createPortal` (which lives at `react-dom`'s top-level) work.
+      - CSP allows `style-src 'self' 'unsafe-inline' https://&lt;storage&gt;`
+        — `'unsafe-inline'` is required because customer components use
+        inline `style={{ ... }}` props (CONVENTIONS.md token system is
+        style-prop heavy). Script-src stays nonce-only — no
+        `'unsafe-inline'` for scripts.
+      - Iframe sizing from postMessage `ready`/`resize` bbox (initial 1×1
+        until first non-zero); zero-bbox events filtered at both sides so
+        the host doesn't snap-fit to (0, 0) on the empty pre-render frame.
+      - ComponentManifest type collapse (D2) renames the prior generic
+        `ComponentManifest&lt;P&gt;` to a non-generic shape extending
+        BuildManifest. AnyComponentManifest preserved as an alias for
+        consumers that imported it. No external callers had to change.
+    </deviations>
+
+    <verification gate="PR7" result="PASS">
+      verify-iframe harness (live hosted DB + live Storage): 38 cases PASS.
+      Breakdown:
+      - 13 iframe-protocol type-guard cases (positive + negative across
+        init/setProps/ready/resize/error).
+      - 10 synthesize-defaults cases (empty controls + every D1 row kind
+        producing the correct default).
+      - 10 Storage sign + HEAD cases (JS, CSS, globals list+sign+HEAD,
+        ACAO header present, missing-key createSignedUrl errors).
+      - 5 DB sentinel cases (manifest insert + 9 D1 rows round-trip +
+        component_views insert via service-role).
+      Teardown clean: leftover_conns=0, leftover_storage=0.
+
+      No-regression: verify-push-webhook (PR5, 12 cases) PASS; verify-
+      build-worker (PR6, 14 cases) PASS — both unchanged.
+
+      Builds GREEN: pnpm --filter @usemount/shared build (tsc -b) clean;
+      pnpm --filter @usemount/api build (tsc -b) clean; pnpm --filter
+      @usemount/web exec tsc --noEmit clean; pnpm --filter @usemount/web
+      build (next build) 10 routes incl. the new `ƒ /preview/[manifestId]`
+      and `ƒ Proxy (Middleware)` intact.
+
+      Port-boot smoke (PR5/PR6 pattern): two passes.
+      - DISABLE_BUILD_WORKER=1 on port 4007: only `usemount.dev API running
+        on port 4007` startup line, `/health → {"ok":true}` HTTP 200,
+        SIGTERM → `[main] SIGTERM — shutting down` → clean exit.
+      - Worker enabled on port 4008: both `[worker:local-...] startup` AND
+        `usemount.dev API running on port 4008` lines, `/health → 200`,
+        SIGTERM → `[main]` then `[worker:...] explicit stop — finishing
+        current job, then exiting`, clean exit.
+
+      0003 RPC live re-verified via Management API: prosecdef=true,
+      proconfig=['search_path=public, pg_temp'], args='p_worker_id text',
+      ret='SETOF build_jobs'. has_function_privilege: service=true,
+      anon=false, auth=false. ACL via pg_proc.proacl =
+      `{postgres=X/postgres,service_role=X/postgres}` — PUBLIC absent
+      (REVOKE effective; PR6 lockdown holds).
+
+      Storage `component-artifacts` bucket private, 50 MiB/object; PR7
+      sentinel uploads succeed, HEAD returns 200 + ACAO header, signed-
+      URL TTL respected, list-prefix sort by updated_at desc returns the
+      globals match.
+
+      Live HTTP smoke against `next start` on port 4010 (advisor #3):
+      `/preview/notauuid` → 400 Bad Request with the error-page CSP
+      (`default-src 'none'; style-src 'unsafe-inline'; frame-ancestors
+      'self';`), `content-type: text/html`, `x-content-type-options:
+      nosniff`. `/preview/00000000-0000-0000-0000-000000000000` (well-
+      formed UUID, no matching row) → 404 Not Found with same headers.
+      Confirms the route is reachable + path validation + RLS-filtered
+      DB lookup + error CSP emit. Server boot clean, SIGTERM clean.
+
+      NOT exercised (deferred, R7/R9): live iframe in a real browser
+      (sandbox attribute enforcement, customer bundle dynamic import,
+      postMessage round-trip with actual React rendering). The pure-
+      function harness validates the HTML/CSP shape + protocol guards +
+      Storage end-to-end; the live browser smoke fires when the first
+      real build lands via R7/R9 (Railway deploy + GitHub webhook). The
+      `next build` + `next start` HTTP smoke validate compile-time +
+      runtime reachability + header shape.
+
+      Brand-WIP files (modified `icon.svg`/`dashboard-nav.tsx`/`login-
+      screen.tsx`/`sidebar-header-zone.tsx`, deleted `mount-glyph.svg`/
+      `mount-wordmark.svg`, untracked `mount-logo-*.svg`, `design-philosophy/
+      Design Purgatory/`) — untouched throughout the session, travel via
+      native git through `git checkout staging` and the merge.
+    </verification>
+
+    <known-risks>
+      Carry-forward from PR3/PR4/PR5/PR6:
+      - R1 two-app footgun stands (apps/api uses ONLY the GitHub App).
+      - R7 apps/api never deploy-verified; first staging→main is first
+        hosted run. PR7's iframe runtime adds a NEW Railway deploy
+        concern: the `/preview-runtime/*.mjs` static assets must ship with
+        the web app's `public/` folder (Next 16 handles this by default).
+      - R9 cors('*') untouched + GitHub App Setup/Webhook URLs unset.
+        Iframe D1=same-origin v1 piles a new R9 item: lift to
+        `preview.usemount.dev` subdomain for cross-origin defense-in-depth.
+      - R2 PAT used in audit + verify-iframe shredded after run; owner
+        deletes in Supabase dashboard at hand-back (same triple-precedent
+        pattern as PR2/4.2-prep/PR5/PR6).
+      - Rate-limit + node_modules cache eviction + worker SIGTERM
+        `process.once` + stale-lease 10-min window + git-diff over-
+        approximation + processJob never exercised end-to-end — all PR6-
+        carry-forward, all v1-accepted.
+
+      PR7-introduced:
+      - **Iframe is same-origin (D1=c)** — defense-in-depth multiplier
+        deferred to R9 cleanup (`preview.usemount.dev` DNS + route
+        hostname binding). The sandbox attrs + opaque-origin semantics
+        + strict CSP + frame-ancestors 'self' already enforce isolation
+        at the JS level; R9 widens the moat at the network/origin level.
+      - **Bundle export discovery is heuristic** (mod.default OR first
+        PascalCase function). Works for dogfood + REV-Plugin (PR6 spike's
+        introspect picks the same first PascalCase from
+        getExportedDeclarations()). Fails for: non-PascalCase exported
+        components, re-export-only modules (`export * from "./impl"`),
+        bundles where esbuild flattens to multiple PascalCase exports
+        from re-exports. Step 5 hardens via `entryExportName: string` in
+        BuildManifest if these patterns emerge.
+      - **globals.css key resolution via Storage list** (one extra
+        roundtrip per /preview hit). The worker uploads `${instanceId}/
+        globals.&lt;hash&gt;.css`; the hash isn't persisted to a DB
+        column. v1 acceptable; Step 5 may persist a `globals_css_key`
+        column on `instances` if list-cost becomes measurable.
+      - **Signed-URL TTL leaks** (15-min reuse window) — accepted v1
+        trade-off for fewer signing roundtrips.
+      - **CSP `style-src 'unsafe-inline'`** required because customer
+        components use inline `style={{ ... }}` props (project
+        CONVENTIONS.md is style-prop heavy). Script-src stays nonce-only;
+        no `'unsafe-inline'` for scripts. Style attr enforcement awaits
+        either CSS-class conversion (Step 5+) or `'unsafe-hashes'`
+        coverage (per-style hash; impractical for varied prop values).
+      - **No live-browser sandbox attestation in this session** — the
+        verify-iframe harness validates pure functions + Storage + DB,
+        but the actual browser-enforced sandbox boundary (parent.document
+        throws SecurityError, fetch blocked by `connect-src 'none'`,
+        opaque-origin localStorage) fires only when a real browser
+        renders the iframe. The CSP header string + sandbox attrs are
+        structurally correct per spec; full live exercise lands when the
+        first real build is hosted (R7/R9).
+      - **Theme inheritance gap** — customer `globals.css` typically
+        defines `[data-theme="dark"]` selectors that gate the dark variant
+        of every token. The iframe `<html>` has no `data-theme` attribute
+        set, so dark variants never activate; the preview renders in light
+        mode even when the parent dashboard is in dark mode. v1 acceptable
+        (visual mismatch only on dark-mode hosts). Step 5 lifts it via a
+        `theme: 'light' | 'dark'` field on the `HostToIframe.init` payload
+        + a one-line `document.documentElement.dataset.theme = ...` in the
+        iframe bootstrap.
+      - **`maybe-rsc` / `unsupported` tile is rendered inside the canvas
+        stage**, not the sidebar. The sidebar shows disabled leaves
+        (per `disabled: kind !== "component" || !artifact_url` in
+        from-supabase.ts), but a click still navigates and lands on the
+        canvas tile. Step 5's architecture-brief §3 disposition 1
+        ("Server component — not supported" leaf in sidebar with explicit
+        note) refines this; v1 ships with the inline-tile fallback.
+      - **The `from-supabase.ts` registry builder uses single-level
+        folders** (one folder per unique `folder_path`). Nested folder
+        hierarchy reconstruction from path-parts is a Step 5 polish; v1
+        flat-by-direct-parent reads correctly for dogfood + REV-Plugin.
+      - **The `team` + `user` fields on the runtime Registry are stub
+        objects** (`{id: "", name: "", plan: ""}` / `{name: "", email:
+        ""}`). The dashboard nav avatar already binds to
+        supabase.auth.getUser() (PR2); the team-chip surfaces are demo-
+        era. Stubs are safe because no v1 sidebar consumer dereferences
+        these fields critically.
+      - **Iframe re-mount on selection change is the React `key={manifest.
+        id}`** — every selection tears down + remounts the iframe
+        (correct semantically; no stale postMessage state across
+        selections). The bundle re-imports each time. Browser caches
+        kick in for repeated visits to the same manifest; signed URL
+        caching is bounded by the 15-min TTL.
+
+      Pre-existing, not yours to fix:
+      - `[branch]` vs `[...branch]` slug routing; non-unique slug scheme
+        (v1-safe); `pnpm lint` fails on PR2's nav-avatar.tsx (missing
+        @next/eslint-plugin-next) — `next build` is the real gate.
+    </known-risks>
+
+    <next>
+      PR8 = Step 4.4 (Realtime stale-viewer — small tail). Replace
+      `apps/web/components/live/app-shell/stale-viewer-trigger.tsx`'s 30s
+      setTimeout with a `supabase.channel('instance:${id}').on('postgres_
+      changes', { table: 'instances', filter: 'id=eq.${id}' })`
+      subscription watching last_synced_commit_sha changes. Fires the
+      existing warning-toast banner when the sha drifts from the viewer's
+      session sha. ~30 lines, one file modified. Owner approved the
+      two-PR-one-session framing at PR6 hand-back; PR8 lands separately
+      after PR7 is merged + pushed AND advisor approves.
+
+      Step 5 (manifest auto-generation polish): provider auto-detect from
+      `app/layout.tsx`, `canvas.providers.tsx` fallback, `Component.
+      canvas.tsx` per-component overrides, failure-mode dispositions
+      (architecture-brief §3 cases 1–7 — incl. the sidebar "Server
+      component — not supported" leaf that PR7 ships inline as a canvas
+      tile), support-matrix connect-gate (Tailwind v3 / Next 15 must be
+      REFUSED at connect — REV-Plugin proved this gate is load-bearing),
+      stale-instance reconciler (every N hours), node_modules cache LRU
+      eviction, optional `entryExportName` field on BuildManifest if
+      non-PascalCase / re-export patterns emerge in real customer repos
+      (PR7's heuristic export discovery is the hedge), nested folder
+      hierarchy in the sidebar tree, persisted globals_css_key on
+      `instances` if list-cost becomes measurable.
+
+      R7/R9 = coordinated hosted cutover (Railway deploy + GitHub App
+      Setup URL + Webhook URL + CORS lock + custom-domain DNS, incl.
+      `preview.usemount.dev` for D1 cross-origin defense-in-depth).
+      Worth doing as one coherent gate; PR7's iframe sandbox + CSP
+      already enforce the JS-level boundary so D1 cross-origin is a
+      defense-in-depth bonus, not a v1 blocker.
+
+      Before PR8: confirm PAT was deleted in Supabase dashboard;
+      Realtime subscription needs no migration (the channel infrastructure
+      is enabled by default on Supabase).
     </next>
   </pr>
 </migration-log>
