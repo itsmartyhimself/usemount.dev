@@ -1,12 +1,14 @@
 import { AppShell } from "@/components/live/app-shell"
+import { fetchInstanceRegistry } from "@/lib/registry/from-supabase"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 
-// migration-plan Step 3: resolve the route slugs to a real instance row
-// server-side (RLS as the signed-in user). The URL scheme is slug-based and
-// non-unique (workspace name + repo half) — resolution is best-effort and a
-// miss is non-fatal: AppShell still renders from the slugs. The component tree
-// that will consume instanceId/manifestCount (the "first sync hasn't run"
-// empty state) stays mock until Step 4.3 — this is the fetch seam only.
+// PR7 (Step 4.3): server-side fetch of the instance's manifests, RLS-scoped
+// to the signed-in user. Both the sidebar tree and the per-leaf manifest map
+// are produced in one round-trip and threaded into the AppShell. If
+// resolution fails or the instance has no manifests yet, AppShell still
+// renders against an empty registry (the sidebar shows nothing, the canvas
+// shows the empty placeholder — PR8 adds a Realtime subscription that fills
+// the registry once the first sync completes).
 export default async function InstancePage({
   params,
 }: {
@@ -17,6 +19,9 @@ export default async function InstancePage({
   let instanceId: string | undefined
   let repoConnectionId: string | undefined
   let manifestCount: number | undefined
+  let initialRegistryArgs:
+    | Awaited<ReturnType<typeof fetchInstanceRegistry>>
+    | null = null
 
   try {
     const supabase = await createSupabaseServerClient()
@@ -50,6 +55,10 @@ export default async function InstancePage({
             .select("id", { count: "exact", head: true })
             .eq("instance_id", inst.id)
           manifestCount = count ?? 0
+          initialRegistryArgs = await fetchInstanceRegistry(
+            supabase,
+            instanceId,
+          )
         }
       }
     }
@@ -65,6 +74,7 @@ export default async function InstancePage({
       instanceId,
       repoConnectionId,
       manifestCount,
+      leaves: initialRegistryArgs?.registry.leaves.length ?? 0,
     })
 
   return (
@@ -77,6 +87,8 @@ export default async function InstancePage({
         repoConnectionId,
         manifestCount,
       }}
+      initialRegistry={initialRegistryArgs?.registry}
+      initialManifests={initialRegistryArgs?.manifests}
     />
   )
 }

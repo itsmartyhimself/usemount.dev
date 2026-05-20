@@ -1,7 +1,16 @@
 "use client"
 
-// DEMO-ONLY — in-memory state for the sidebar. Replace with server calls when
-// the backend exists. See apps/web/ROADMAP.md → "Backend / Registry".
+// PR7 (Step 4.3): the sidebar registry is sourced from live `component_manifests`
+// rows, fetched server-side by the InstancePage and passed in via
+// `initialRegistry` + `initialManifests`. The provider is otherwise unchanged
+// from the demo-era version: same context shape, same actions, same hover/
+// scroll/highlight mechanics. Only the data source moved.
+//
+// `initialManifests` is the per-leaf-id Map the canvas-controls-context reads
+// when the user selects a leaf (replacing the old getManifest() lookup
+// against MANIFESTS in lib/registry/manifests.ts). Both props default to
+// empty-but-valid shapes so callers without instance context (e.g. legacy
+// /playground mounts) keep rendering.
 
 import {
   createContext,
@@ -14,8 +23,8 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react"
+import type { ComponentManifest } from "@usemount/shared"
 import type { Registry } from "@/lib/registry/types"
-import { DEMO_REGISTRY } from "@/lib/registry/data"
 import { searchRegistry, type SearchMatch } from "@/lib/registry/search"
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "./sidebar-panel.config"
 
@@ -33,6 +42,8 @@ export type RowRegistry = Map<string, HTMLElement>
 
 export interface SidebarPanelContextValue {
   registry: Registry
+  /** Manifest lookup keyed by leaf id (= component_manifests.id). */
+  manifests: Map<string, ComponentManifest>
   expandedIds: Set<string>
   searchQuery: string
   searchMatch: SearchMatch | null
@@ -50,8 +61,39 @@ export interface SidebarPanelContextValue {
 
 const SidebarPanelContext = createContext<SidebarPanelContextValue | null>(null)
 
-export function SidebarPanelProvider({ children }: { children: ReactNode }) {
-  const [registry] = useState<Registry>(DEMO_REGISTRY)
+const EMPTY_REGISTRY: Registry = {
+  sections: [],
+  folders: [],
+  leaves: [],
+  topPages: [],
+  team: { id: "", name: "", plan: "" },
+  user: { name: "", email: "" },
+}
+
+export interface SidebarPanelProviderProps {
+  children: ReactNode
+  /**
+   * Pre-fetched sidebar shape. `Registry` is the demo-era tree shape; the
+   * server-side `fetchInstanceRegistry` helper builds it from
+   * component_manifests rows. Defaults to an empty registry so legacy /
+   * playground mounts still render.
+   */
+  initialRegistry?: Registry
+  /**
+   * Pre-fetched manifest map keyed by leaf id. Defaults to an empty Map.
+   */
+  initialManifests?: Map<string, ComponentManifest>
+}
+
+export function SidebarPanelProvider({
+  children,
+  initialRegistry,
+  initialManifests,
+}: SidebarPanelProviderProps) {
+  const [registry] = useState<Registry>(initialRegistry ?? EMPTY_REGISTRY)
+  const [manifests] = useState<Map<string, ComponentManifest>>(
+    initialManifests ?? new Map(),
+  )
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
   const [searchQuery, setSearchQueryState] = useState<string>("")
   const [openDocId, setOpenDocId] = useState<string | null>(null)
@@ -192,6 +234,7 @@ export function SidebarPanelProvider({ children }: { children: ReactNode }) {
   const value = useMemo<SidebarPanelContextValue>(
     () => ({
       registry,
+      manifests,
       expandedIds,
       searchQuery,
       searchMatch,
@@ -208,6 +251,7 @@ export function SidebarPanelProvider({ children }: { children: ReactNode }) {
     }),
     [
       registry,
+      manifests,
       expandedIds,
       searchQuery,
       searchMatch,

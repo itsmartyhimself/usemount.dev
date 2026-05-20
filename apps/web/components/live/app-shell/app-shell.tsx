@@ -1,3 +1,5 @@
+import type { ComponentManifest } from "@usemount/shared"
+import type { Registry } from "@/lib/registry/types"
 import { Canvas } from "./canvas"
 import { CanvasViewProvider } from "./canvas-view-context"
 import { StaleViewerTrigger } from "./stale-viewer-trigger"
@@ -13,9 +15,6 @@ export interface AppShellInstance {
   repo: string
   branch: string
   // Resolved server-side from the route slugs (PR3 / migration-plan Step 3).
-  // Optional + additive so /playground and slug-only callers still type-check.
-  // The component tree / registry that would consume these stays mock until
-  // Step 4.3 — this is the fetch seam, not its consumer.
   instanceId?: string
   repoConnectionId?: string
   manifestCount?: number
@@ -25,19 +24,38 @@ export interface AppShellProps {
   /**
    * Route-derived instance identity from `/[workspace]/[repo]/[branch]`.
    * Optional: other callers (e.g. /playground) mount AppShell with no instance
-   * and must keep working. Threaded for migration-plan Step 3 — no fetch yet,
-   * rendering is identical whether or not this is provided.
+   * and must keep working.
    */
   instance?: AppShellInstance
+  /**
+   * Pre-fetched sidebar registry. PR7 fetches it server-side from
+   * `component_manifests` rows for the instance. Optional — defaults to an
+   * empty registry so legacy callers without instance context still render.
+   */
+  initialRegistry?: Registry
+  /**
+   * Pre-fetched manifest map keyed by leaf id (= component_manifests.id).
+   * PR7 consumes it through SidebarPanelProvider → canvas-controls-context.
+   */
+  initialManifests?: Map<string, ComponentManifest>
 }
 
-export function AppShell({ instance }: AppShellProps = {}) {
+export function AppShell({
+  instance,
+  initialRegistry,
+  initialManifests,
+}: AppShellProps = {}) {
   if (process.env.NODE_ENV !== "production")
-    console.debug("[AppShell] instance", instance)
+    console.debug("[AppShell] instance", instance, {
+      manifests: initialManifests?.size ?? 0,
+    })
   return (
     <ToastProvider>
       <CanvasViewProvider>
-        <SidebarPanelProvider>
+        <SidebarPanelProvider
+          initialRegistry={initialRegistry}
+          initialManifests={initialManifests}
+        >
           <main
             className="flex"
             style={{
