@@ -19,6 +19,7 @@ export default async function InstancePage({
   let instanceId: string | undefined
   let repoConnectionId: string | undefined
   let manifestCount: number | undefined
+  let lastSyncedCommitSha: string | null | undefined
   let initialRegistryArgs:
     | Awaited<ReturnType<typeof fetchInstanceRegistry>>
     | null = null
@@ -44,12 +45,13 @@ export default async function InstancePage({
         repoConnectionId = conn.id
         const { data: inst } = await supabase
           .from("instances")
-          .select("id")
+          .select("id, last_synced_commit_sha")
           .eq("repo_connection_id", conn.id)
           .eq("branch", branch)
           .maybeSingle()
         if (inst) {
           instanceId = inst.id
+          lastSyncedCommitSha = inst.last_synced_commit_sha
           const { count } = await supabase
             .from("component_manifests")
             .select("id", { count: "exact", head: true })
@@ -86,6 +88,7 @@ export default async function InstancePage({
         instanceId,
         repoConnectionId,
         manifestCount,
+        lastSyncedCommitSha,
       }}
       initialRegistry={initialRegistryArgs?.registry}
       initialManifests={initialRegistryArgs?.manifests}
