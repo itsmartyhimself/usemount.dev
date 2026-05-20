@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server"
 import { buildApp } from "./app.js"
+import { startWorkerLoop } from "./build/worker.js"
 
 // Local dev loads apps/api/.env.local. On Railway, env vars are injected into
 // the process directly (no file), so loadEnvFile throws there and we fall back
@@ -35,6 +36,39 @@ if (missing.length > 0) {
 const app = buildApp()
 const port = Number(process.env.PORT) || 4000
 
-serve({ fetch: app.fetch, port }, (info) => {
+const httpServer = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`usemount.dev API running on port ${info.port}`)
+})
+
+// Build worker runs alongside the HTTP server — it polls `build_jobs` via the
+// 0003 lease RPC, processes one job at a time, heartbeats while running. Set
+// DISABLE_BUILD_WORKER=1 in dev to run the API without it (e.g. when working
+// on routes only, no real builds needed).
+const workerEnabled = !process.env.DISABLE_BUILD_WORKER
+const worker = workerEnabled ? startWorkerLoop() : null
+
+// Single source of process lifecycle. On SIGTERM/SIGINT: stop accepting new
+// leases, await the current job to finish (or natural loop exit if idle),
+// then close the HTTP server. Railway's drain semantics rely on this.
+const shutdown = async (sig: string) => {
+  console.log(`[main] ${sig} — shutting down`)
+  try {
+    worker?.stop()
+    if (worker) await worker.done
+  } catch (e) {
+    console.error(`[main] worker shutdown error: ${(e as Error).message}`)
+  }
+  try {
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+  } catch (e) {
+    console.error(`[main] httpServer.close error: ${(e as Error).message}`)
+  }
+  console.log("[main] shutdown complete")
+  process.exit(0)
+}
+process.once("SIGTERM", () => {
+  shutdown("SIGTERM").catch(() => process.exit(1))
+})
+process.once("SIGINT", () => {
+  shutdown("SIGINT").catch(() => process.exit(1))
 })

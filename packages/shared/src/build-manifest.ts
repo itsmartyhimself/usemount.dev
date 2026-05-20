@@ -11,12 +11,34 @@
 // Every field maps 1:1 to a public.component_manifests column
 // (supabase/migrations/0001_init.sql) — the comment on each line is the column.
 
+// One control row per resolved prop. The 4.3 canvas panel renders each kind:
+//   variants/sizes/forms — exclusive toggle (one option per row)
+//   booleans             — switch
+//   slots                — slot mount point (ReactNode)
+//   strings              — text input (interactive)
+//   numbers              — number input (interactive)
+//   handlers             — typed read-only row showing the function signature
+//                          (rich invoke widget = Step 5)
+//   objects              — typed read-only row showing the type string
+//                          (rich JSON editor = Step 5)
+// The PR6 D1 hybrid scope: every resolved prop yields a row (no empty panels
+// when props exist); rich widgets for enum/bool/slot/string/number, typed
+// read-only rows for handler/object until Step 5. The 4.3 canvas panel must
+// know how to draw all eight row kinds.
 export interface BuildManifestControls {
   variants?: { prop: string; options: string[] }
   sizes?: { prop: string; options: string[] }
   forms?: { prop: string; options: string[] }
   booleans: string[]
   slots: Array<{ prop: string; label: string }>
+  // Interactive widgets added in PR6 (D1 hybrid).
+  strings: Array<{ prop: string }>
+  numbers: Array<{ prop: string }>
+  // Typed read-only rows added in PR6 (D1 hybrid). The 4.3 panel shows
+  // `prop: signature` / `prop: typeString` so the user always sees the prop
+  // exists and its type, even before Step 5 ships interactive widgets.
+  handlers: Array<{ prop: string; signature: string }>
+  objects: Array<{ prop: string; typeString: string }>
 }
 
 // `component`  — a normal client component, previewable.
