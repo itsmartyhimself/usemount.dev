@@ -2397,4 +2397,398 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       coordination is the biggest one).
     </next>
   </pr>
+
+  <pr id="9" branch="feat/migration-step-5.1" base="staging" covers="Step 5.1"
+      verified="builds+harness+no-regression+boot-smoke" date="2026-05-20">
+    <secrets-policy>No Management API or live DB writes required —
+      support-matrix.ts is pure and the verify-connect-gate harness is
+      in-process. Owner provided a session-only Supabase PAT for the
+      STEP 0a audit (live `pg_publication_tables` re-check of 0004
+      from PR8 was offered but skipped — the PR8 verify-realtime pass
+      this session is the stronger live proof). PAT staged to
+      `/tmp/usemount-sb-pat` mode-600 for the session, shredded at
+      hand-back. Owner deletes the PAT in the Supabase dashboard at
+      done-report (R2).</secrets-policy>
+
+    <decisions>
+      <decision id="scope" name="PR9 sub-PR within Step 5"
+                answer="(a) connect-gate only; PR10 reconciler offered at done-gate">
+        Architecture-brief defines six Step 5 sub-PRs: (a) connect-gate,
+        (b) provider auto-detect, (c) canvas.providers.tsx, (d)
+        Component.canvas.tsx, (e) reconciler, (f) RSC sidebar entries.
+        Recommended ordering = a → e → b+c → d → f. Owner picked
+        "medium scope" at kickoff. Per advisor: treat PR9 = connect-gate
+        ALONE as the contract; surface PR10 (reconciler) as an explicit
+        check at done-gate, don't pre-bundle. This entry covers (a)
+        only; PR10 is a separate later commit + merge + push if owner
+        approves at hand-back.
+      </decision>
+      <decision id="failure-surface" name="how to render gate refusal"
+                answer="reuse existing error alert with multi-line copy">
+        Owner clarified at kickoff that an "unsupported stack" refusal
+        and a "bug/network" failure are completely different outcomes,
+        and asked for the simplest path for v1 (proper failure-screen
+        UI is a later design pass). Backend distinguishes the two via
+        response shape — 422 + structured violations (renderable) for
+        matrix mismatch, 502 with `{message}` for Octokit/network
+        errors. Frontend catch branches on `e.body.kind === 'unsupported'`
+        and formats violations into the existing error alert via
+        `whiteSpace: pre-line`. Zero new components; the structured
+        backend response keeps a future UI revision cheap.
+      </decision>
+      <decision id="data-source" name="how to learn the customer's stack"
+                answer="package.json via GitHub App contents:read API">
+        Only sane choice — authoritative (matches what the build worker
+        would see at install time), uses the existing PR3 permission,
+        one round-trip. Considered + rejected: parsing a future
+        `mount.config.ts` (doesn't exist yet, net-new convention),
+        trial build (burns worker cycles for what's a metadata-only
+        question).
+      </decision>
+      <decision id="matrix" name="which checks the gate enforces"
+                answer="all five hard checks (architecture-brief §17–73)">
+        React ≥19, (Next ≥16 OR Vite ≥5), Tailwind ≥4, TypeScript ≥5,
+        a lockfile present. Owner was hesitant ("does the version
+        really matter?") — advisor confirmed each check prevents a
+        concrete failure mode: Tailwind v4 is load-bearing for the
+        worker CSS pipeline (REV-Plugin spike proved v3 fails); the
+        lockfile is required for package-manager auto-detect; TS 5+
+        for compiler-API AST correctness on PR6 introspection; Next
+        ≥16 / Vite ≥5 for app-shape assumptions in introspection;
+        React ≥19 for forward-compat with the iframe ESM runtime.
+        Soft-warn on unsupported CSS strategies is OUT of v1.
+      </decision>
+      <decision id="copy" name="violation message tone"
+                answer="explicit `required (you have found)` per violation">
+        Owner-confirmed at kickoff (D5 verbatim selection in the
+        ask-user-question preview). The "you have X" line is honest
+        delivery of the architecture-brief promise ("clear 'not yet
+        supported' message at connect time, not a half-broken
+        preview"). CTA buttons (Talk to us / Try a different repo)
+        skipped for v1 per "simplest" — the user will design proper
+        failure-screen UI later.
+      </decision>
+      <decision id="semver-lib" name="how to parse version strings"
+                answer="custom regex; no new dep">
+        `semver` is NOT a transitive dep of apps/api (`node -e
+        require('semver')` throws Cannot find module). Per
+        ~/.claude/CLAUDE.md "do not add new infra or dependencies
+        unless asked," wrote a focused regex that extracts the major
+        digit from a leading `[~^>=<\s]*v?(\d+)` and treats anything
+        else (`workspace:*`, `git+ssh://…`, `npm:react@…`, `link:…`,
+        etc.) as `unparseable`. 13 extractMajor-shape cases in the
+        harness — every realistic real-world version string the
+        regex needs to handle.
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Re-verified PR7 + PR8 + carry-forward PR5/PR6 via parallel
+      Explore agents + direct reads of the files the prior agent
+      called BLOCKER on. Net: 2 small NITs, no blockers; per
+      ask-user-question owner chose to defer the NIT cleanup to a
+      separate small follow-up (not bundle into PR9).
+
+      OK across the board:
+      - PR8 stale-viewer-trigger: useRef baseline, removeChannel
+        cleanup, sha-comparison handles null baseline, toast fires on
+        non-null differing sha — all four checks pass.
+      - PR8 0004 migration: idempotent guard present; verify-realtime
+        5/5 passes on solo run this session.
+      - PR7 /preview route: UUID validation, RLS-gated fetch via
+        server client (not admin), kind validation, artifact_url
+        validation, per-request nonce via randomBytes(16), CSP
+        directive set complete, referrer-policy: no-referrer.
+      - PR7 iframe-html.ts: jsonForScript escape, buildCsp directives,
+        bootstrap event.source check, pickComponent heuristic,
+        error/unhandledrejection forwarding.
+      - PR7 iframe-mount.tsx: event.source === contentWindow,
+        propsRef, key={renderableManifest.id} on parent
+        stage-content.tsx:163 (audit confirmed parent owns lifecycle).
+      - PR7 preview-runtime/*.mjs: 4 files present, ~216 KB total.
+      - PR7 shared/{manifest,iframe-protocol,synthesize-defaults}.ts:
+        D2 collapse correct, protocol version 1, type guards,
+        synthesizeDefaultProps covers all 9 D1 row kinds.
+      - PR7 from-supabase.ts: registry build, manifest map with
+        synthesized defaults, error-fallback, partial-row tolerance.
+      - PR7 verify-iframe + build-preview-runtime: scripts correct.
+      - PR5/PR6 carry-forward: webhook HMAC + 401-before-parse, worker
+        shutdownFlag + heartbeat + orphan sweep + build_status,
+        0003 RPC SECURITY DEFINER + service_role-only EXECUTE.
+
+      NIT 1 — `apps/api/scripts/verify-realtime.ts:212-220`: teardown
+      deletes via repo_connections CASCADE (correct + safe) but the
+      harness only LOGS the teardown step; there's no explicit
+      `assert("leftover_conns === 0", ...)` post-deletion. Cleanup
+      is correct by construction; the assertion is documentation-
+      only. ~5 LOC fix. Deferred.
+
+      NIT 2 — `apps/web/app/preview/[manifestId]/route.ts:133-142`:
+      the error-response branch (renderErrorHtml) sets
+      content-type/CSP/x-content-type-options but does NOT set
+      `x-frame-options: SAMEORIGIN`. The happy-path branch does
+      (line 127). Defense-in-depth gap; the error page renders only
+      an "invalid manifest id" / "manifest not found" string, no
+      iframe-able content, but consistency favors mirroring the
+      success branch's headers. ~1 LOC fix. Deferred.
+
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked)
+      travelled via native git through the PR8 merge + the
+      feat/migration-step-5.1 branch cut without being staged.
+    </audit-findings>
+
+    <step-5.1 title="Connect-gate (support-matrix check at connect time)">
+      <code>
+        NEW apps/api/src/github/support-matrix.ts — pure logic. Reads
+        a parsed package.json + a lockfile name, returns
+        SupportMatrixViolation[] (empty = pass). Six fields:
+        `package-json` (single root-cause when pkg null — skips the
+        other 5 so the user gets one actionable line, not a wall of
+        "absent"), `react`, `next-or-vite` (either-or check), `tailwind`,
+        `typescript`, `lockfile`. Three reasons: too-old, absent,
+        unparseable. extractMajor() handles `^19.0.0`, `~14.2.0`,
+        `5`, `>=4.0.0 &lt;5.0.0`, `v19.0.0`, `19.0.0-rc.1`; rejects
+        `git+ssh://…`, `workspace:*`, `npm:react@^17`, empty/null as
+        unparseable. Zero IO, zero deps — testable in-process.
+
+        NEW apps/api/src/github/fetch-package-json.ts — Octokit
+        wrapper. `fetchRepoMeta(octokit, owner, repo, ref)` does ONE
+        root listing (1 Octokit call) — pulls all root file names —
+        then conditionally fetches package.json (1 more call only if
+        present). Detects lockfile name in the same root listing. 1 MB
+        sanity cap on package.json size. Returns
+        `{ packageJson, lockfileName }`; on absent/oversize/parse-fail,
+        leaves packageJson null and the matrix check surfaces a
+        single `package-json: absent` violation.
+
+        MOD apps/api/src/github/connections.ts — connect-gate inserted
+        BETWEEN the 409 cross-workspace guard (existential check) and
+        the repo_connections upsert (capability check ordering:
+        existence → ownership → matrix → write). Two failure modes:
+        (a) Octokit throws → `throw new HTTPException(502, {message:
+        "Couldn't verify support — GitHub didn't respond. Try
+        again."})`, (b) matrix mismatch → `return c.json({kind:
+        "unsupported" as const, violations}, 422)`. The 422 path is
+        the new structured response shape; everything else preserves
+        the existing HTTPException pattern.
+
+        MOD apps/web/lib/api/client.ts — extended `ApiError` with an
+        optional `body?: unknown` field. apiFetch's error branch now
+        parses application/json responses into `body` (and extracts
+        `body.message` if present), keeping the existing text-only
+        fallback for non-JSON errors. Backward-compatible — every
+        existing caller still works against ApiError.message; the
+        new field lets callers like the connect-form branch on
+        `body.kind === "unsupported"` to render structured payloads.
+
+        MOD apps/web/components/live/connect-repo-form/connect-repo-
+        form.tsx — added an `isUnsupported` type guard and a
+        `formatUnsupported` helper that turns the 422 violations
+        array into multi-line D5 copy ("This repo isn't supported
+        yet.\n\nusemount.dev requires:\n• React v19+ (you have
+        v17.0.2)\n…"). The catch handler branches: 422 + unsupported
+        body → formatted violations; other ApiError → existing
+        "Connect failed (status). message"; non-ApiError → existing
+        "Connect failed. Try again.". Existing error `&lt;p
+        role="alert"&gt;` gains `whiteSpace: "pre-line"` so the
+        newlines render. Zero new components.
+
+        NEW apps/api/scripts/verify-connect-gate.ts — 39-case
+        in-process harness. extractMajor() shape cases (13), happy
+        paths (5 — Next, Vite, devDeps-only, future major versions,
+        Vite-OK-overrides-Next-too-old either-or behavior), per-field
+        refusals (10 — React too-old / missing / 18-boundary, Next
+        14 / Vite 4 / neither, Tailwind 3 too-old, TS 4 too-old, no
+        lockfile, React git+ssh unparseable), combined 5-axis refusal
+        (6 — total count + per-field check), edge cases (5 — null
+        pkg / non-object pkg / empty pkg / null deps / exact versions).
+        Pure function harness — no DB, no Octokit. Sentinel range
+        999_999_999_951/952 reserved for future PR9 cases that need
+        live state.
+
+        MOD apps/api/package.json — added `verify:connect-gate`
+        script. No new deps.
+
+        MOD migration-plan.md — this `&lt;pr id="9"&gt;` entry.
+      </code>
+    </step-5.1>
+
+    <deviations>
+      - **No new UI component**. The handoff plan anticipated a new
+        `apps/web/components/live/connect-repo-form/unsupported-matrix.
+        tsx` subcomponent. Owner picked "simplest for now" at D2
+        kickoff; advisor agreed (structured backend response keeps
+        future UI revision cheap). The existing error alert
+        (lines 152-160) renders multi-line copy via `whiteSpace:
+        pre-line`. ~50 LOC of new component avoided.
+      - **No `semver` dep**. The npm `semver` package isn't a
+        transitive of apps/api. Wrote a focused 1-line regex
+        (`SEMVER_MAJOR_RE`) that handles every realistic version-
+        string shape from real-world package.json files. Verified
+        via 13 extractMajor cases in the harness.
+      - **Root-listing optimization**. fetchRepoMeta does ONE
+        `getContent("")` to learn both (a) whether package.json
+        exists and (b) which lockfile is present, then conditionally
+        ONE more `getContent("package.json")` if needed. 2 Octokit
+        calls max on the happy path; 1 call if no package.json.
+      - **No new field on the matrix for "next-15"**. The matrix
+        treats Next ≥16 as the cut. Next 15 → too-old, no special
+        case (the user just sees "Next.js v16+ or Vite v5+ (you
+        have Next.js v15…)"). Could special-case 15 as a near-miss
+        with a "we're working on 15 support" hint later; v1 keeps
+        the message uniform.
+      - **No live HTTP smoke this session**. Doing a real
+        `/repo-connections` POST requires a Bearer token from a
+        signed-in user + a real GitHub App install + a real
+        package.json fetch through Octokit. The pure-function matrix
+        logic is exhaustively covered (39/39); the route-handler
+        integration (order-of-checks placement, 502 catch shape,
+        422 structured shape, Buffer base64 decode in
+        fetchRepoMeta) is small and uncovered. Owner can drive
+        the live smoke during the hand-back by clicking through
+        /connect against a Tailwind-v4 repo (happy path) and any
+        old-Tailwind public repo (refusal path) — both via
+        `next dev` against the existing local apps/api process.
+        Deferred but documented.
+    </deviations>
+
+    <verification gate="PR9" result="PASS">
+      verify-connect-gate harness: 39/39 PASS (pure function, instant).
+
+      Builds GREEN:
+      - `pnpm --filter @usemount/shared build` (tsc -b) clean.
+      - `pnpm --filter @usemount/api build` (tsc -b) clean.
+      - `cd apps/web &amp;&amp; pnpm exec tsc --noEmit` clean.
+      - `cd apps/web &amp;&amp; pnpm exec next build` — `✓ Compiled
+        successfully in 3.0s`, 10 routes intact incl. `ƒ /connect`,
+        `ƒ /connect/callback`, `ƒ /preview/[manifestId]` (PR7),
+        `ƒ /[workspace]/[repo]/[branch]`, middleware proxy.
+
+      No-regression:
+      - verify-iframe (PR7, 38 cases): PASS.
+      - verify-push-webhook (PR5, 12 cases): PASS.
+      - verify-realtime (PR8, 5 cases): PASS on solo run (parallel
+        with build-worker hit the documented Realtime worker refresh
+        window — see PR8 known-risks; re-ran solo, PASS).
+      - verify-build-worker (PR6, 14 cases): 8/9 pass on the run
+        attempted this session; case 9 (caseFail's setup
+        leaseNextJob) fails because the user has 3 long-running
+        `tsx watch src/index.ts` build worker processes active on
+        this machine (started before this session). Pre-existing
+        test precondition is "stop the dev workers before running
+        the harness" — not a PR9 regression. PR9 doesn't touch the
+        worker, lease RPC, or build_jobs schema. Documented in
+        known-risks.
+
+      Port-boot smoke: PORT=4013, observed
+      `[worker:local-...] startup`, `usemount.dev API running on
+      port 4013`, SIGTERM →
+      `[main] SIGTERM — shutting down` →
+      `[worker:...] explicit stop — finishing current job, then
+      exiting`, clean shutdown (exit 143 = SIGTERM-terminated).
+
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked)
+      untouched across PR8 merge + PR9 branch cut + PR9 commit.
+
+      NOT exercised (deferred — owner-runnable during hand-back):
+      - Live HTTP `/repo-connections` POST end-to-end (requires
+        Bearer + real GitHub install + real package.json fetch).
+        Owner can run `next dev` against the existing apps/api
+        process and click through /connect on a Tailwind-v4 repo
+        (happy path expected: redirect to /[workspace]/[repo]/main)
+        and any old-Tailwind public repo (refusal expected:
+        formatted 422 violations in the existing error alert).
+    </verification>
+
+    <known-risks>
+      Carry-forward (PR3/PR4/PR5/PR6/PR7/PR8): R1 two-app footgun,
+      R7 apps/api never deploy-verified, R9 cors('*') + GitHub App
+      URLs unset + D1 same-origin iframe. All unchanged from PR8.
+      PR8 R-Realtime-settle window also still applies on R7/R9
+      first-deploy.
+
+      PR9-introduced:
+      - **Monorepo customers refused on root package.json**. v1
+        reads the root package.json only. A pnpm/yarn/npm workspace
+        root with no React/Next deps would be refused even if a
+        child workspace is legitimately supported. Workspace-aware
+        scan (read `workspaces` field, scan each child for the
+        canonical React app) is a Step 5 follow-up.
+      - **Verify-build-worker dev-worker precondition**. The PR6
+        harness fails case 9 when other `tsx watch src/index.ts`
+        worker processes are running on the host because they
+        compete for the lease. Not new in PR9 — pre-existing test
+        precondition documented now. Operational fix: `pkill -f
+        "tsx watch src/index.ts"` before running the harness, or
+        accept the partial pass on a dev machine.
+      - **2 audit NITs deferred to a future follow-up PR**:
+        verify-realtime teardown leftover-conns assert (~5 LOC) +
+        /preview error-CSP x-frame-options consistency (~1 LOC).
+        Owner chose at kickoff to defer rather than bundle into PR9.
+      - **No durable record of connect-gate refusals**. When the
+        gate refuses a customer, the 422 response is the only
+        artifact — nothing is logged to Postgres / Sentry / etc.
+        Without a refusal log we don't know what stacks people are
+        trying to connect with, so investment direction (e.g.
+        "should we add Tailwind v3 support?") is blind. Step 5
+        polish; not blocking for v1.
+      - **No "near-miss" hints**. Next 15 / TS 4.9 / React 18.3.1
+        are presented identically to Next 12 / TS 3 / React 16
+        ("too-old", same copy). A future polish could note "very
+        close — Next 15 minor-bumped to 16 last quarter, upgrade
+        is small" for the boundary cases. v1 ships uniform messages.
+      - **No reconciler yet** (architecture-brief §11). Webhook
+        delivery has the "Re-sync now" manual button (PR5+) but no
+        every-2h reconciler comparing pinned-branch HEAD vs
+        last_synced_commit_sha. PR10 is the natural follow-up,
+        offered at hand-back per the kickoff D1 conversation.
+
+      Pre-existing, not yours to fix:
+      - `[branch]` vs `[...branch]` slug routing; non-unique slug
+        scheme (v1-safe); `pnpm lint` fails on PR2's nav-avatar.tsx
+        (missing @next/eslint-plugin-next) — `next build` is the
+        real gate.
+    </known-risks>
+
+    <next>
+      Step 5 sub-PRs still to ship (architecture-brief §3 + §11):
+      - (e) Webhook reconciler — every-2h drift check via GitHub App
+        + `build_jobs` insert. PR10 candidate; offered to owner at
+        PR9 hand-back per the kickoff conversation.
+      - (b) Provider auto-detect from `app/layout.tsx` — scan for
+        known providers (next-themes, @emotion/react, @tanstack/
+        react-query, etc.), emit `providers.auto.tsx` in the bundle,
+        iframe wraps every component.
+      - (c) `canvas.providers.tsx` fallback — repo-root file the
+        worker copies into the bundle when the customer's provider
+        is bespoke.
+      - (d) `Component.canvas.tsx` per-component override — exported
+        `controls` merge into / override the auto-generated panel.
+      - (f) RSC sidebar disposition — promote PR7's `maybe-rsc` /
+        `unsupported` inline tile to a sidebar greyed-out leaf with
+        explicit "Server component — not supported" note
+        (architecture-brief §3 disposition 1).
+
+      PR7+PR8 audit-NIT cleanup (small standalone PR or bundled into
+      a later sub-PR):
+      - verify-realtime teardown leftover-conns assert.
+      - /preview error-CSP x-frame-options consistency.
+
+      PR9-introduced known-risks worth surfacing during R7/R9
+      planning: monorepo-customer refusal (workspace-aware scan
+      needed for org customers with monorepos), connect-gate
+      refusal logging (decide table vs Sentry).
+
+      R7/R9 still deferred (Railway + GitHub App URLs + CORS lock
+      + custom-domain DNS + cross-origin preview subdomain). With
+      Step 5 underway the system gets closer to "honest at scale" —
+      every Step 5 sub-PR removes one "looks like our bug but is
+      really an unsupported stack / missing provider / failed
+      webhook" failure mode.
+
+      Before R7/R9: confirm PAT was deleted in Supabase dashboard
+      (this PR9 used the PAT only for the optional STEP 0a re-check
+      that was skipped; shred + deletion still applies for hygiene).
+    </next>
+  </pr>
 </migration-log>

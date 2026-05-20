@@ -14,6 +14,10 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    // Parsed JSON body (when the response sent one). Lets callers branch on
+    // structured error payloads — e.g. the connect-gate's 422 carries
+    // `{ kind: "unsupported", violations: [...] }` for inline rendering.
+    public body?: unknown,
   ) {
     super(message)
     this.name = "ApiError"
@@ -42,6 +46,18 @@ export async function apiFetch<T>(
   })
 
   if (!res.ok) {
+    const ct = res.headers.get("content-type") ?? ""
+    if (ct.includes("application/json")) {
+      const body = (await res.json().catch(() => null)) as unknown
+      const msg =
+        body &&
+        typeof body === "object" &&
+        "message" in body &&
+        typeof (body as { message: unknown }).message === "string"
+          ? (body as { message: string }).message
+          : res.statusText
+      throw new ApiError(res.status, msg, body)
+    }
     const msg = await res.text().catch(() => res.statusText)
     throw new ApiError(res.status, msg || res.statusText)
   }
