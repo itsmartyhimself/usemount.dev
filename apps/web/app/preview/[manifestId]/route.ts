@@ -138,6 +138,10 @@ function errorResponse(message: string, status: number): NextResponse {
       "content-security-policy":
         "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self';",
       "x-content-type-options": "nosniff",
+      // Defense-in-depth consistency with the success path above: the error
+      // page has no iframe-able content, but mirroring the SAMEORIGIN header
+      // keeps the surface uniform for future readers + scanners.
+      "x-frame-options": "SAMEORIGIN",
     },
   })
 }
