@@ -1,21 +1,34 @@
 "use client"
 
-// TODO(ROADMAP: Component rendering / import pipeline → Sandboxed iframe host):
-// manifest-backed components render inline in the host bundle today. The
-// sandboxed iframe pipeline will eventually replace this; bbox already comes
-// from a real ResizeObserver for manifest-backed leaves, so the swap is local.
+// PR7 (Step 4.3): manifest-backed leaves now render via the sandboxed
+// preview iframe (apps/web/components/live/iframe-mount). The host listens
+// for postMessage bbox updates from the iframe and forwards them to the
+// canvas-view context — first non-zero bbox = setContentBbox (fit), later
+// bboxes = updateContentBboxBounds (silent bounds update, preserves the
+// user's manual zoom/pan).
+//
+// Per architecture-brief §3 dispositions: manifests with kind=maybe-rsc
+// render an inline "Server component — not supported" tile. Kind=unsupported
+// or null artifact_url renders a "couldn't initialize" tile.
 
-import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react"
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  type CSSProperties,
+} from "react"
+import type { IframeBbox } from "@usemount/shared"
 import type { LeafRecord } from "@/lib/registry/types"
 import { useCanvasView } from "./canvas-view-context"
 import { useCanvasControls } from "@/components/live/canvas-controls"
+import { IframeMount } from "@/components/live/iframe-mount"
 
 type StageContentProps = {
   selected: LeafRecord | null
 }
 
 // Mock sizes used for leaves without a manifest. Manifest-backed components
-// measure themselves via ResizeObserver below.
+// measure themselves via the iframe's ResizeObserver → postMessage flow.
 const MOCK_SIZES: Record<string, { width: number; height: number }> = {
   "cmp-button": { width: 160, height: 48 },
   "cmp-input": { width: 280, height: 48 },
@@ -52,6 +65,7 @@ const MOCK_SIZES: Record<string, { width: number; height: number }> = {
 
 const DEFAULT_SIZE = { width: 520, height: 320 }
 const EMPTY_SIZE = { width: 520, height: 260 }
+const FAILURE_TILE_SIZE = { width: 520, height: 200 }
 
 const centerAnchorStyle: CSSProperties = {
   position: "absolute",
@@ -76,13 +90,33 @@ const mockCardStyle = (
   boxShadow: "var(--shadow-small)",
 })
 
+const failureTileStyle: CSSProperties = {
+  ...centerAnchorStyle,
+  width: FAILURE_TILE_SIZE.width,
+  height: FAILURE_TILE_SIZE.height,
+  borderRadius: "var(--radius-4)",
+  background: "var(--color-bg-secondary)",
+  border: "1px dashed var(--color-border-secondary)",
+  flexDirection: "column",
+  padding: "var(--spacing-4)",
+  gap: "var(--spacing-2)",
+}
+
 export function StageContent({ selected }: StageContentProps) {
   const { setContentBbox, updateContentBboxBounds } = useCanvasView()
   const { manifest, props } = useCanvasControls()
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
   const fittedForIdRef = useRef<string | null>(null)
 
   const hasManifest = !!manifest
+  const renderableManifest =
+    manifest && manifest.kind === "component" && manifest.artifactUrl
+      ? manifest
+      : null
+
+  // Reset the fit-tracking when the selection changes.
+  useLayoutEffect(() => {
+    fittedForIdRef.current = null
+  }, [renderableManifest?.id])
 
   // Mock path: deterministic bbox from the table; refit on selection change.
   useLayoutEffect(() => {
@@ -93,39 +127,75 @@ export function StageContent({ selected }: StageContentProps) {
     setContentBbox(bbox)
   }, [selected, hasManifest, setContentBbox])
 
-  // Manifest path: first measurement for a given selection refits the canvas;
-  // later measurements (driven by prop tweaks) update bounds silently so the
-  // user's manual zoom/pan isn't snapped back to fit on every prop change.
-  useEffect(() => {
+  // Failure tile (kind=maybe-rsc / unsupported / missing artifact_url) gets a
+  // fixed bbox so the canvas fits the tile without a measure step.
+  useLayoutEffect(() => {
     if (!hasManifest) return
-    const el = wrapperRef.current
-    if (!el || typeof ResizeObserver === "undefined") return
-    const id = selected?.id ?? null
-    fittedForIdRef.current = null
-    const ro = new ResizeObserver((entries) => {
-      const rect = entries[0].contentRect
-      if (rect.width === 0 && rect.height === 0) return
-      const bbox = { width: rect.width, height: rect.height }
+    if (renderableManifest) return
+    setContentBbox(FAILURE_TILE_SIZE)
+  }, [hasManifest, renderableManifest, setContentBbox])
+
+  const onIframeBbox = useCallback(
+    (bbox: IframeBbox, _kind: "ready" | "resize") => {
+      if (!renderableManifest) return
+      if (bbox.width === 0 && bbox.height === 0) return
+      const id = renderableManifest.id
       if (fittedForIdRef.current !== id) {
         fittedForIdRef.current = id
         setContentBbox(bbox)
       } else {
         updateContentBboxBounds(bbox)
       }
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [hasManifest, selected, setContentBbox, updateContentBboxBounds])
+    },
+    [renderableManifest, setContentBbox, updateContentBboxBounds],
+  )
 
-  if (hasManifest && manifest) {
+  const onIframeError = useCallback((message: string) => {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[iframe error]", message)
+    }
+  }, [])
+
+  if (renderableManifest) {
     return (
       <div style={centerAnchorStyle}>
-        <div
-          ref={wrapperRef}
-          style={{ width: "fit-content", height: "fit-content" }}
+        <IframeMount
+          key={renderableManifest.id}
+          manifestId={renderableManifest.id}
+          instanceId={renderableManifest.instanceId}
+          props={props}
+          title={renderableManifest.title}
+          onBbox={onIframeBbox}
+          onError={onIframeError}
+        />
+      </div>
+    )
+  }
+
+  if (hasManifest && manifest) {
+    // kind=maybe-rsc / unsupported / null artifact_url
+    const heading =
+      manifest.kind === "maybe-rsc"
+        ? "Server component"
+        : "Couldn't initialize"
+    const detail =
+      manifest.kind === "maybe-rsc"
+        ? "Server components aren't supported in v1. Add a 'use client' directive at the top of the file to preview."
+        : "The build pipeline didn't produce a bundle for this component. Check the build log for details."
+    return (
+      <div style={failureTileStyle}>
+        <p
+          className="type-5 text-trim"
+          style={{ color: "var(--color-text-primary)" }}
         >
-          {manifest.render(props)}
-        </div>
+          {heading}
+        </p>
+        <p
+          className="type-3 text-trim"
+          style={{ color: "var(--color-text-tertiary)", textAlign: "center" }}
+        >
+          {detail}
+        </p>
       </div>
     )
   }

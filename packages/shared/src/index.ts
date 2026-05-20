@@ -1,3 +1,5 @@
 export * from "./manifest.js"
 export * from "./build-manifest.js"
 export * from "./types.js"
+export * from "./iframe-protocol.js"
+export * from "./synthesize-defaults.js"

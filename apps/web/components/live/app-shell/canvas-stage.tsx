@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import { AnimatePresence, motion } from "framer-motion"
-import { DEMO_REGISTRY } from "@/lib/registry/data"
+import { useSidebarPanelContext } from "@/components/live/sidebar-panel"
 import { StageContent } from "./stage-content"
 import { useCanvasView } from "./canvas-view-context"
 
@@ -16,11 +16,14 @@ type CanvasStageProps = {
 
 export function CanvasStage({ selectedId }: CanvasStageProps) {
   const { view, isAnimating, endAnimation } = useCanvasView()
+  const { registry } = useSidebarPanelContext()
 
   const selected = useMemo(() => {
     if (!selectedId) return null
-    return DEMO_REGISTRY.leaves.find((leaf) => leaf.id === selectedId) ?? null
-  }, [selectedId])
+    return (
+      registry.leaves.find((leaf) => leaf.id === selectedId) ?? null
+    )
+  }, [selectedId, registry])
 
   return (
     <div

@@ -409,6 +409,116 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
+const inputStyle: CSSProperties = {
+  height: 28,
+  minWidth: 140,
+  maxWidth: 180,
+  padding: "0 8px",
+  borderRadius: 6,
+  background: COLOR_INACTIVE_BG,
+  border: "1px solid var(--color-border-secondary)",
+  color: "var(--color-text-primary)",
+  fontSize: PANEL_ROW_TEXT_SIZE,
+  lineHeight: 1,
+  outline: "none",
+  fontFamily: "inherit",
+}
+
+const typeBadgeStyle: CSSProperties = {
+  maxWidth: 200,
+  padding: "4px 8px",
+  borderRadius: 6,
+  background: COLOR_INACTIVE_BG,
+  color: COLOR_INACTIVE_FG,
+  fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+  fontSize: 11,
+  lineHeight: 1.2,
+  textAlign: "right",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+}
+
+function labelOf(prop: string): string {
+  return prop.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())
+}
+
+function toNumber(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v
+  if (typeof v === "string") {
+    const n = Number(v)
+    if (Number.isFinite(n)) return n
+  }
+  return 0
+}
+
+function PropRow({ prop, children }: { prop: string; children: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        height: 36,
+        gap: 12,
+      }}
+    >
+      <span style={{ ...rowLabelStyle, textTransform: "capitalize" }}>
+        {labelOf(prop)}
+      </span>
+      {children}
+    </div>
+  )
+}
+
+function TextInput({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string
+  onChange: (next: string) => void
+  ariaLabel: string
+}) {
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel}
+      style={inputStyle}
+    />
+  )
+}
+
+function NumberInput({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: number
+  onChange: (next: number) => void
+  ariaLabel: string
+}) {
+  return (
+    <input
+      type="number"
+      value={value}
+      onChange={(e) => onChange(toNumber(e.target.value))}
+      aria-label={ariaLabel}
+      style={inputStyle}
+    />
+  )
+}
+
+function TypeBadge({ text }: { text: string }) {
+  return (
+    <span style={typeBadgeStyle} title={text}>
+      {text}
+    </span>
+  )
+}
+
 export function PropertiesPanel() {
   const { manifest, props, setProp, reset } = useCanvasControls()
   const [open, setOpen] = useState(false)
@@ -506,7 +616,7 @@ export function PropertiesPanel() {
               </>
             )}
 
-            {controls.booleans && controls.booleans.length > 0 && (
+            {controls.booleans.length > 0 && (
               <>
                 <Section title="Options">
                   <div
@@ -552,7 +662,7 @@ export function PropertiesPanel() {
               </>
             )}
 
-            {controls.slots && controls.slots.length > 0 && (
+            {controls.slots.length > 0 && (
               <>
                 <Section title="Slots">
                   <div
@@ -587,6 +697,74 @@ export function PropertiesPanel() {
                           {props[slot.prop] ? "Set" : "Default"}
                         </span>
                       </div>
+                    ))}
+                  </div>
+                </Section>
+                <div style={dividerStyle} />
+              </>
+            )}
+
+            {controls.strings.length > 0 && (
+              <>
+                <Section title="Text">
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    {controls.strings.map(({ prop }) => (
+                      <PropRow key={prop} prop={prop}>
+                        <TextInput
+                          value={String(props[prop] ?? "")}
+                          onChange={(next) => setProp(prop, next)}
+                          ariaLabel={labelOf(prop)}
+                        />
+                      </PropRow>
+                    ))}
+                  </div>
+                </Section>
+                <div style={dividerStyle} />
+              </>
+            )}
+
+            {controls.numbers.length > 0 && (
+              <>
+                <Section title="Numbers">
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    {controls.numbers.map(({ prop }) => (
+                      <PropRow key={prop} prop={prop}>
+                        <NumberInput
+                          value={toNumber(props[prop])}
+                          onChange={(next) => setProp(prop, next)}
+                          ariaLabel={labelOf(prop)}
+                        />
+                      </PropRow>
+                    ))}
+                  </div>
+                </Section>
+                <div style={dividerStyle} />
+              </>
+            )}
+
+            {controls.handlers.length > 0 && (
+              <>
+                <Section title="Callbacks">
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    {controls.handlers.map(({ prop, signature }) => (
+                      <PropRow key={prop} prop={prop}>
+                        <TypeBadge text={signature} />
+                      </PropRow>
+                    ))}
+                  </div>
+                </Section>
+                <div style={dividerStyle} />
+              </>
+            )}
+
+            {controls.objects.length > 0 && (
+              <>
+                <Section title="Objects">
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    {controls.objects.map(({ prop, typeString }) => (
+                      <PropRow key={prop} prop={prop}>
+                        <TypeBadge text={typeString} />
+                      </PropRow>
                     ))}
                   </div>
                 </Section>
