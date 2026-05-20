@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server"
 import { buildApp } from "./app.js"
+import { startReconcilerLoop } from "./build/reconciler.js"
 import { startWorkerLoop } from "./build/worker.js"
 
 // Local dev loads apps/api/.env.local. On Railway, env vars are injected into
@@ -47,14 +48,24 @@ const httpServer = serve({ fetch: app.fetch, port }, (info) => {
 const workerEnabled = !process.env.DISABLE_BUILD_WORKER
 const worker = workerEnabled ? startWorkerLoop() : null
 
+// Reconciler (Step 5.2) ticks every 2h, diffs pinned-branch HEAD vs
+// last_synced_commit_sha and enqueues a build_jobs row on drift. Cheap
+// insurance against a missed push-webhook. Independent DISABLE flag —
+// operators can run worker-only or reconciler-only by combining flags.
+const reconcilerEnabled = !process.env.DISABLE_RECONCILER
+const reconciler = reconcilerEnabled ? startReconcilerLoop() : null
+
 // Single source of process lifecycle. On SIGTERM/SIGINT: stop accepting new
-// leases, await the current job to finish (or natural loop exit if idle),
-// then close the HTTP server. Railway's drain semantics rely on this.
+// leases + cancel the reconciler timer, await the current job and any tick in
+// flight to finish, then close the HTTP server. Railway's drain semantics
+// rely on this.
 const shutdown = async (sig: string) => {
   console.log(`[main] ${sig} — shutting down`)
   try {
+    reconciler?.stop()
     worker?.stop()
     if (worker) await worker.done
+    if (reconciler) await reconciler.done
   } catch (e) {
     console.error(`[main] worker shutdown error: ${(e as Error).message}`)
   }

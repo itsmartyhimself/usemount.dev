@@ -140,6 +140,20 @@ console.log("--- happy paths ---")
   )
 }
 {
+  // Bun 1.2+ ships the text-based bun.lock by default (the binary bun.lockb
+  // is legacy). A modern `bun init`'d customer would otherwise be refused
+  // here — regression guard for the KNOWN_LOCKFILES coverage in
+  // fetch-package-json.ts.
+  const v = checkSupportMatrix({
+    packageJson: {
+      dependencies: { react: "^19.0.0", next: "^16.0.0" },
+      devDependencies: { tailwindcss: "^4.0.0", typescript: "^5.0.0" },
+    },
+    lockfileName: "bun.lock",
+  })
+  expectEq("Modern Bun text lockfile (bun.lock) = pass", v, [])
+}
+{
   const v = checkSupportMatrix({
     packageJson: {
       dependencies: { react: "^19.0.0", next: "^14.2.0", vite: "^5.0.0" },

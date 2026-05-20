@@ -226,7 +226,7 @@ export function checkSupportMatrix(
     violations.push({
       field: "lockfile",
       required:
-        "a lockfile (pnpm-lock.yaml, package-lock.json, yarn.lock, or bun.lockb)",
+        "a lockfile (pnpm-lock.yaml, package-lock.json, yarn.lock, bun.lock, or bun.lockb)",
       found: null,
       reason: "absent",
     })

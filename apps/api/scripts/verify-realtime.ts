@@ -99,6 +99,18 @@ async function teardown(s: SetupResult | null): Promise<void> {
   if (!s) return
   const sb = supabaseAdmin()
   await sb.from("repo_connections").delete().eq("id", s.repoConnectionId)
+  // CASCADE on repo_connections.id clears every dependent instances/build_jobs
+  // row by construction; the assert guards against a future FK-shape change
+  // silently leaving sentinels behind for the next harness run to trip on.
+  const { count: leftoverConns } = await sb
+    .from("repo_connections")
+    .select("id", { count: "exact", head: true })
+    .eq("github_install_id", TEST_INSTALL_ID)
+  assert(
+    "teardown left no sentinel repo_connection",
+    (leftoverConns ?? 0) === 0,
+    `expected 0, got ${leftoverConns}`,
+  )
 }
 
 interface UpdatePayload {

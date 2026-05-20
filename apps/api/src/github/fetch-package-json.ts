@@ -11,10 +11,17 @@ import type { Octokit } from "@octokit/rest"
 
 const PACKAGE_JSON_MAX_BYTES = 1_000_000
 
+// Bun 1.2 (Jan 2025) made the text-based `bun.lock` the new default for
+// `bun install`; `bun.lockb` is the legacy binary format. Recognise both so a
+// freshly-`bun init`'d customer (text-default since 1.2) and a pre-migrated
+// repo (binary, still valid) both pass the gate. Source: Bun docs at
+// https://github.com/oven-sh/bun/blob/main/docs/pm/lockfile.mdx — "1.2.0+ it
+// is the default format used for new projects".
 const KNOWN_LOCKFILES = [
   "pnpm-lock.yaml",
   "package-lock.json",
   "yarn.lock",
+  "bun.lock",
   "bun.lockb",
 ] as const
 
