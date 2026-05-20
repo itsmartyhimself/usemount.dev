@@ -18,6 +18,13 @@ export interface AppShellInstance {
   instanceId?: string
   repoConnectionId?: string
   manifestCount?: number
+  /**
+   * `instances.last_synced_commit_sha` at page-load time — PR8 (Step 4.4)
+   * baseline for the Realtime stale-viewer subscription. `null` means
+   * "no successful build yet"; the first sha that arrives will trigger
+   * the stale-viewer toast.
+   */
+  lastSyncedCommitSha?: string | null
 }
 
 export interface AppShellProps {
@@ -69,7 +76,10 @@ export function AppShell({
             <Canvas />
           </main>
           <DocModal />
-          <StaleViewerTrigger />
+          <StaleViewerTrigger
+            instanceId={instance?.instanceId}
+            initialSha={instance?.lastSyncedCommitSha}
+          />
         </SidebarPanelProvider>
       </CanvasViewProvider>
     </ToastProvider>

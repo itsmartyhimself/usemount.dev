@@ -9,6 +9,7 @@
     "verify:push-webhook": "tsx scripts/verify-push-webhook.ts",
     "verify:build-worker": "tsx scripts/verify-build-worker.ts",
     "verify:iframe": "tsx scripts/verify-iframe.ts",
+    "verify:realtime": "tsx scripts/verify-realtime.ts",
     "e2e:fresh-clone": "tsx scripts/e2e-fresh-clone.ts",
     "build:preview-runtime": "tsx scripts/build-preview-runtime.ts",
     "build": "tsc -b",

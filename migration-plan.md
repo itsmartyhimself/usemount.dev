@@ -2137,4 +2137,264 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       is enabled by default on Supabase).
     </next>
   </pr>
+
+  <pr id="8" branch="feat/migration-step-4.4" base="staging" covers="Step 4.4"
+      verified="builds+harness-live+no-regression+boot-smoke" date="2026-05-20">
+    <secrets-policy>Session-only Supabase PAT supplied by the owner to
+      apply 0004_realtime_publication.sql; staged to /tmp/usemount-sb-pat
+      mode-600, used only via Management API POST /database/query, shredded
+      at hand-back. Owner deletes the PAT in the Supabase dashboard at
+      done-report (R2). Verify-realtime harness writes one sentinel
+      instances row (TEST_INSTALL_ID=999_999_999_961, branch "test/pr8-
+      realtime") and tears it down via CASCADE on repo_connections delete
+      in a finally block.</secrets-policy>
+
+    <correction pr="7">
+      The PR7 `<next>` clause predicted "Realtime subscription needs no
+      migration (the channel infrastructure is enabled by default on
+      Supabase)." That's wrong on a v2-era Supabase project — the
+      `supabase_realtime` publication ships EMPTY (no public.* tables); a
+      channel subscribed to `postgres_changes` on `public.instances`
+      enters SUBSCRIBED but never receives an event. PR8 includes a tiny
+      0004 migration to add `public.instances` to the publication —
+      verified empirically below.
+    </correction>
+
+    <decisions>
+      <decision id="publication-mode" name="how to register public.instances"
+                answer="ALTER PUBLICATION ADD TABLE (0004 migration)">
+        The standard Supabase pattern. Idempotent guarded ADD via DO block
+        so re-applying the migration is a no-op. RLS-gating on the
+        receiving side is unchanged (the existing instances_select_policy
+        from PR2 already restricts visibility to workspace members).
+        Considered but rejected: (a) enabling Realtime via the Supabase
+        dashboard toggle (non-reproducible, not in migration history; the
+        owner asked for migration files only); (b) `FOR ALL TABLES` on
+        the publication (over-broad — only instances needs to be
+        Realtime-watched in v1).
+      </decision>
+      <decision id="filter-format" name="channel filter" answer="id=eq.<uuid>">
+        The Realtime postgres_changes `filter` syntax. UUID columns work
+        verbatim. Verify-realtime confirms the filter delivers exactly
+        the targeted row's UPDATE events (no cross-row leakage). The
+        browser StaleViewerTrigger uses the same filter form.
+      </decision>
+      <decision id="sha-baseline" name="how the trigger detects 'changed'"
+                answer="ref-captured initialSha + per-event compare">
+        StaleViewerTrigger captures `initialSha` at mount and stores it
+        in a ref. On each UPDATE event, compares `payload.new.last_synced_
+        commit_sha` to the ref; if different (and non-null), fires the
+        toast AND updates the ref to the new sha so subsequent changes
+        re-trigger. `initialSha == null` (instance never built) is a
+        valid baseline — the first non-null sha triggers the toast (the
+        "your first sync just completed" path).
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      The PR7 audit + 0003 RPC live re-verification carried forward into
+      this session (PR8 cuts from staging at `5e21843` — the PR7 merge).
+      0002 dedup index, 0003 SECURITY DEFINER lease RPC, build_status
+      enum, component-artifacts bucket, all PR6/PR7 surface unchanged.
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked) travelled
+      via native git through the PR7 merge AND the PR8 branch cut without
+      being staged.
+    </audit-findings>
+
+    <step-4.4 title="Realtime stale-viewer">
+      <db>
+        NEW supabase/migrations/0004_realtime_publication.sql — idempotent
+        guarded `ALTER PUBLICATION supabase_realtime ADD TABLE
+        public.instances`. Applied via Management API POST /database/query;
+        verified live: `pg_publication_tables` row =
+        `{pubname=supabase_realtime, schemaname=public, tablename=instances,
+        attnames={id, workspace_id, repo_connection_id, branch, pinned,
+        last_synced_commit_sha, last_synced_at, build_status, created_at}}`.
+        `pg_publication.pubinsert/pubupdate/pubdelete/pubtruncate` all
+        true (default Supabase publication operation set). Replica identity
+        unchanged (`relreplident='d'`, default = primary key) — sufficient
+        for INSERT + the NEW image of UPDATE/DELETE events; payload.old on
+        UPDATE/DELETE carries pkey only, which is all the stale-viewer
+        logic needs (it inspects payload.new.last_synced_commit_sha).
+      </db>
+      <code>
+        MOD apps/web/components/live/app-shell/stale-viewer-trigger.tsx —
+        the 30s setTimeout demo replaced with a
+        `supabase.channel('instance:&lt;id&gt;').on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'instances',
+        filter: 'id=eq.&lt;id&gt;' })` subscription. `initialSha` captured
+        from props at mount and stored in a ref; per-event comparison
+        triggers the existing warning-tone toast (architecture-brief §3
+        Stale viewer detection prose preserved verbatim — title "This
+        branch has an update", action "Refresh", duration: Infinity).
+        Cleanup via `supabase.removeChannel(channel)` on unmount. If
+        instanceId is undefined (legacy /playground mounts), no
+        subscription is created and the component renders null silently.
+
+        MOD apps/web/components/live/app-shell/app-shell.tsx — threads
+        instance.instanceId + instance.lastSyncedCommitSha into
+        StaleViewerTrigger. AppShellInstance interface gains
+        `lastSyncedCommitSha?: string | null` (PR7 had everything except
+        the sha — PR8 carries it for the baseline compare).
+
+        MOD apps/web/app/[workspace]/[repo]/[branch]/page.tsx — extends
+        the server-side instance fetch to also select last_synced_commit_
+        sha; threads it through into the AppShell instance prop. RLS
+        unchanged (the row is gated by instances_select_policy).
+
+        NEW apps/api/scripts/verify-realtime.ts — 5-case in-process
+        harness. Subscribes via supabaseAdmin (service-role; bypasses RLS
+        on receive — the stronger end-to-end proof than the dashboard's
+        Realtime inspector). Sentinel ids: TEST_INSTALL_ID=999_999_999_961.
+        Cases: (1) channel reaches SUBSCRIBED within 7s, (2) instances
+        UPDATE succeeds, (3) postgres_changes UPDATE event received
+        within 7s of the UPDATE, (4) payload.new.last_synced_commit_sha
+        matches the value the test wrote, (5) removeChannel cleans up.
+        Teardown via repo_connections CASCADE delete.
+
+        MOD apps/api/package.json — added `verify:realtime` script.
+
+        MOD migration-plan.md — `<pr id="8">` migration-log entry +
+        small correction on PR7's "no migration needed" claim.
+      </code>
+    </step-4.4>
+
+    <deviations>
+      - Migration is a guarded `DO $$ ... IF NOT EXISTS ... ALTER ... END
+        $$;` (idempotent on re-apply), not a bare `ALTER PUBLICATION ...
+        ADD TABLE ...;` (which throws SQLSTATE 42710 on a second apply).
+        Doesn't change the end state; protects against double-apply if
+        the migration ever lands twice.
+      - Verify-realtime smoke uses the service-role admin client. The
+        browser path uses the user's session client where RLS gates
+        receive; both share the publication infrastructure so a service-
+        role-side pass proves the wire works at the table level. A
+        live browser-session smoke fires when the first real instance is
+        viewable post-R7/R9.
+      - The architecture-brief.md prose for Step 4.4 specifies "on
+        `last_synced_commit_sha` change". PR8 implements this via per-
+        event compare in JS rather than a server-side row filter, because
+        Realtime's `filter` clause supports column-equality predicates
+        but not "column changed". The JS-side compare is equivalent in
+        behavior and adds zero ongoing cost (no extra DB roundtrips).
+    </deviations>
+
+    <verification gate="PR8" result="PASS">
+      verify-realtime harness (live hosted DB + live Realtime): 5/5 PASS.
+      Concretely:
+      - Channel reaches SUBSCRIBED via the service-role admin client.
+      - instances UPDATE writes the new last_synced_commit_sha.
+      - postgres_changes UPDATE event arrives within ~1s of the UPDATE
+        (post-publication-refresh; see operational-note in known-risks).
+      - Event payload.new carries the exact sha the harness wrote.
+      - removeChannel cleans up both client and server-side handles.
+      Teardown clean: leftover_conns=0.
+
+      0004 application live-verified via Management API:
+      `pg_publication_tables` returns
+      `{public, instances, attnames={id, workspace_id, repo_connection_id,
+      branch, pinned, last_synced_commit_sha, last_synced_at,
+      build_status, created_at}}`. Re-apply of the migration is a
+      confirmed no-op (DO block IF NOT EXISTS guard fires).
+
+      No-regression: verify-iframe (PR7, 38 cases) PASS;
+      verify-push-webhook (PR5, 12 cases) PASS; verify-build-worker
+      (PR6, 14 cases) PASS — all three unchanged.
+
+      Builds GREEN: pnpm --filter @usemount/shared build (tsc -b) clean;
+      pnpm --filter @usemount/api build (tsc -b) clean; pnpm --filter
+      @usemount/web exec tsc --noEmit clean; pnpm --filter @usemount/web
+      build (next build) — `✓ Compiled successfully`, 9 static pages,
+      route table unchanged from PR7 (incl. `ƒ /preview/[manifestId]`).
+
+      Port-boot smoke (PR5/PR6/PR7 pattern): PORT=4011, both
+      `[worker:local-...] startup` AND `usemount.dev API running on port
+      4011` lines, `/health → {"ok":true}` HTTP 200, SIGTERM →
+      `[main] SIGTERM — shutting down` → `[worker:...] explicit stop —
+      finishing current job, then exiting`, clean exit.
+
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked) untouched
+      across PR7 merge + PR8 branch cut + PR8 commit.
+
+      NOT exercised (deferred, R7/R9): a live browser session with a
+      real session cookie subscribing to the channel. The service-role
+      smoke proves the table-side wiring; the user-session path uses the
+      same publication + Realtime infrastructure with RLS gating.
+    </verification>
+
+    <known-risks>
+      Carry-forward (PR3/PR4/PR5/PR6/PR7): R1 two-app footgun, R7
+      apps/api never deploy-verified, R9 cors('*') + GitHub App URLs
+      unset + D1 same-origin iframe. All unchanged from PR7.
+
+      PR8-introduced:
+      - **Realtime worker refresh delay** — after adding a table to
+        `supabase_realtime`, the Realtime server can take a short window
+        (observed ~10-30s on this project) to pick up the change. During
+        that window, channels subscribe successfully but events don't
+        fire. The verify-realtime harness initially failed and passed
+        after a 30s wait. Operational implication: don't expect Realtime
+        to start delivering immediately after R7/R9 first applies the
+        migration. v1 acceptable — a one-time settle window at deploy.
+      - **Per-event toast on every sha change** — the trigger fires
+        once per UPDATE that drifts the sha. Rapid successive builds
+        (multiple pushes in quick succession) trigger multiple toasts.
+        sonner replaces in place so the UX collapses to one visible
+        toast; if the user dismisses then a new sha arrives, a new
+        toast appears. v1 acceptable.
+      - **REPLICA IDENTITY DEFAULT** on public.instances — payload.old
+        on UPDATE/DELETE events carries only the primary key. v1's
+        stale-viewer logic only reads payload.new.last_synced_commit_sha
+        so this is fine; if a future feature needs old non-pkey columns,
+        upgrade to FULL via a separate migration.
+      - **Service-role subscriber bypass on the harness path** — the
+        verify-realtime harness uses the admin client which bypasses
+        RLS. The browser path is RLS-gated on receive; this is desired
+        (only workspace members see their own instance's events). A
+        live browser session smoke awaits R7/R9.
+      - **No retry / exponential backoff** on channel disconnects.
+        Supabase's JS client has built-in reconnect heuristics; v1
+        relies on those. If reliability issues surface in production,
+        wrap with a custom reconnect supervisor (Step 5+).
+
+      Pre-existing, not yours to fix:
+      - `[branch]` vs `[...branch]` slug routing; non-unique slug
+        scheme (v1-safe); `pnpm lint` fails on PR2's nav-avatar.tsx
+        (missing @next/eslint-plugin-next) — `next build` is the real
+        gate.
+    </known-risks>
+
+    <next>
+      Step 4 (first end-to-end sync) is now COMPLETE — PR5 closed 4.1,
+      PR6 closed 4.2, PR7 closed 4.3, PR8 closed 4.4.
+
+      Step 5 (manifest auto-generation polish): provider auto-detect
+      from `app/layout.tsx`, `canvas.providers.tsx` fallback,
+      `Component.canvas.tsx` per-component overrides, failure-mode
+      dispositions (architecture-brief §3 cases 1–7), support-matrix
+      connect-gate (Tailwind v3 / Next 15 REFUSED at connect — REV-Plugin
+      proved this gate is load-bearing), stale-instance reconciler
+      (every N hours), node_modules cache LRU eviction. PR7-deferred
+      polish: optional `entryExportName` field on BuildManifest,
+      nested folder hierarchy in the sidebar, persisted globals_css_key
+      on instances if list-cost becomes measurable, theme inheritance
+      (one-line: `theme` in HostToIframe.init + bootstrap sets
+      `document.documentElement.dataset.theme`).
+
+      R7/R9 = coordinated hosted cutover (Railway deploy + GitHub App
+      Setup URL + Webhook URL + CORS lock + custom-domain DNS, incl.
+      `preview.usemount.dev` for D1 cross-origin defense-in-depth).
+      First hosted run will exercise the worker loop on Railway, the
+      real GitHub clone leg via install token, the iframe sandbox
+      enforcement in a real browser, the Realtime channel from a real
+      user session, and the publication on a clean hosted Postgres.
+      Worth doing as one coherent gate; the build-up to it is
+      thoroughly local-verified now.
+
+      Before R7/R9: confirm PAT was deleted in Supabase dashboard;
+      review the consolidated PR7+PR8 known-risks for any items the
+      cutover should explicitly cover (D1 cross-origin subdomain
+      coordination is the biggest one).
+    </next>
+  </pr>
 </migration-log>
