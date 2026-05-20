@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 import { Hono } from "hono"
 import { GITHUB_APP_WEBHOOK_SECRET } from "../env.js"
 import { supabaseAdmin } from "../supabase/admin.js"
+import { enqueuePushBuilds } from "./push-enqueue.js"
 
 // GitHub App webhook. Signature verification is mandatory and happens BEFORE
 // parsing — without it anyone with the URL can forge events. We hash the raw
@@ -12,8 +13,9 @@ import { supabaseAdmin } from "../supabase/admin.js"
 // repository.archived, repository.renamed → mark repo_connections inactive /
 // rename. PR4 adds installation.deleted (full account/org uninstall) → the PR3
 // known-risk that a whole-account uninstall left every connection active=true
-// forever. The push→build_jobs path is Step 4. Unhandled events return 200 so
-// GitHub stops retrying.
+// forever. PR5 adds the `push` branch → build_jobs enqueue (architecture-brief
+// §225: pinned branches only; dedup + rate-limit applied inside
+// enqueuePushBuilds). Unhandled events return 200 so GitHub stops retrying.
 //
 // NOTE: `installation` and `installation_repositories` are GitHub-App lifecycle
 // events delivered to EVERY app automatically (PR1 <gotcha>: they are invalid
@@ -74,6 +76,10 @@ webhookRoutes.post("/github/webhook", async (c) => {
     installation?: { id?: number }
     repository?: { id?: number; full_name?: string }
     repositories_removed?: { id: number }[]
+    ref?: string
+    before?: string
+    after?: string
+    deleted?: boolean
   }
   try {
     payload = JSON.parse(raw)
@@ -109,6 +115,24 @@ webhookRoutes.post("/github/webhook", async (c) => {
     typeof payload.installation?.id === "number"
   ) {
     await deactivateAllForInstall(payload.installation.id)
+  } else if (event === "push") {
+    // `push` has no `action` field — the verb fires on the event name itself.
+    // Skip/dedup/rate-limit decisions are made inside the helper; logging is
+    // best-effort so a noisy installation doesn't drown stdout.
+    const outcomes = await enqueuePushBuilds(payload)
+    for (const o of outcomes) {
+      if (o.kind === "enqueued") {
+        console.log(`[webhook/push] enqueued build_job ${o.jobId}`)
+      } else if (o.kind === "rate-limited") {
+        console.warn(
+          `[webhook/push] rate-limited install ${payload.installation?.id}`,
+        )
+      } else if (o.kind === "skipped" && o.reason === "insert_failed") {
+        console.error("[webhook/push] insert failed")
+      }
+      // `deduped` + other `skipped` reasons are expected/normal traffic and
+      // intentionally silent.
+    }
   }
 
   // 200 for handled and unhandled alike — a non-2xx makes GitHub retry.
