@@ -17,6 +17,43 @@ import {
 import { StepSelectRepo } from "./step-select-repo"
 import { StepAssignWorkspace } from "./step-assign-workspace"
 
+// Wire shape of the 422 response from `POST /repo-connections` when the
+// repo's stack falls outside the bounded support matrix (apps/api/src/github/
+// support-matrix.ts). Mirrored manually rather than imported — apps/web does
+// not consume apps/api types, only its JSON.
+type UnsupportedResponse = {
+  kind: "unsupported"
+  violations: Array<{
+    field: string
+    required: string
+    found: string | null
+    reason: "too-old" | "absent" | "unparseable"
+  }>
+}
+
+function isUnsupported(body: unknown): body is UnsupportedResponse {
+  if (!body || typeof body !== "object") return false
+  const b = body as { kind?: unknown; violations?: unknown }
+  return b.kind === "unsupported" && Array.isArray(b.violations)
+}
+
+// Multi-line D5 copy (migration-plan Step 5.1 §D5). One line per violation:
+// "Required: <required> (you have <found>)" or "Required: <required>
+// (missing)" / "(couldn't parse <found>)" depending on reason.
+function formatUnsupported(body: UnsupportedResponse): string {
+  const lines = ["This repo isn't supported yet.", "", "usemount.dev requires:"]
+  for (const v of body.violations) {
+    const found =
+      v.reason === "absent"
+        ? "missing"
+        : v.reason === "unparseable"
+          ? `couldn't parse ${v.found ?? "?"}`
+          : (v.found ?? "?")
+    lines.push(`• ${v.required} (you have ${found})`)
+  }
+  return lines.join("\n")
+}
+
 export function ConnectRepoForm() {
   const router = useRouter()
   const [repos, setRepos] = useState<InstallRepo[]>([])
@@ -117,11 +154,18 @@ export function ConnectRepoForm() {
       router.push(redirect)
     } catch (e) {
       setSubmitting(false)
-      setError(
-        e instanceof ApiError
-          ? `Connect failed (${e.status}). ${e.message}`
-          : "Connect failed. Try again.",
-      )
+      // The connect-gate (apps/api ...connect-gate at Step 5.1) returns 422
+      // with a structured `{ kind: "unsupported", violations: [...] }` body
+      // when a repo's stack falls outside the support matrix. We render the
+      // violations inline via the existing alert — proper failure-screen UI
+      // is a later design pass (user chose "simplest for now" at PR9 kickoff).
+      if (e instanceof ApiError && e.status === 422 && isUnsupported(e.body)) {
+        setError(formatUnsupported(e.body))
+      } else if (e instanceof ApiError) {
+        setError(`Connect failed (${e.status}). ${e.message}`)
+      } else {
+        setError("Connect failed. Try again.")
+      }
     }
   }, [repos, repoKey, workspaceId, submitting, router])
 
@@ -153,7 +197,12 @@ export function ConnectRepoForm() {
         <p
           className="type-3"
           role="alert"
-          style={{ margin: 0, color: "var(--color-tag-danger-ink)" }}
+          style={{
+            margin: 0,
+            color: "var(--color-tag-danger-ink)",
+            // Lets the multi-line connect-gate violations message wrap.
+            whiteSpace: "pre-line",
+          }}
         >
           {error}
         </p>

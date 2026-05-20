@@ -10,6 +10,7 @@
     "verify:build-worker": "tsx scripts/verify-build-worker.ts",
     "verify:iframe": "tsx scripts/verify-iframe.ts",
     "verify:realtime": "tsx scripts/verify-realtime.ts",
+    "verify:connect-gate": "tsx scripts/verify-connect-gate.ts",
     "e2e:fresh-clone": "tsx scripts/e2e-fresh-clone.ts",
     "build:preview-runtime": "tsx scripts/build-preview-runtime.ts",
     "build": "tsc -b",

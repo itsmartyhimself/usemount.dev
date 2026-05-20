@@ -8,7 +8,9 @@ import {
 } from "../lib/require-user.js"
 import { supabaseAdmin } from "../supabase/admin.js"
 import { getInstallationOctokit } from "./auth.js"
+import { fetchRepoMeta } from "./fetch-package-json.js"
 import { assertInstallationOwnership } from "./installation-ownership.js"
+import { checkSupportMatrix } from "./support-matrix.js"
 
 // repo_connection mutation + branch read. Split from install-callback.ts so
 // the GitHub-discovery surface and the DB-write surface stay separate.
@@ -100,6 +102,37 @@ repoConnectionRoutes.post("/repo-connections", async (c) => {
     throw new HTTPException(409, {
       message: "Repo is already connected to another workspace",
     })
+  }
+
+  // ── Connect-gate (Step 5.1, architecture-brief §17–73) ────────────────────
+  // Refuse stacks outside the bounded support matrix BEFORE inserting the
+  // repo_connections row. Reading package.json via the App's contents:read
+  // permission is metadata-only — no customer code executes.
+  // Two distinct failure modes:
+  //   (a) matrix mismatch → 422 + structured violations (renderable inline)
+  //   (b) Octokit/network error → 502 generic "try again" (transient)
+  // The 422 path is what makes the architecture-brief promise honest;
+  // without it, Tailwind-v3 / Next-15 / React-17 / TS-4 customers hit a
+  // half-broken preview that looks like our bug.
+  {
+    const [owner, repo] = orgRepo.split("/")
+    let meta
+    try {
+      const octo = getInstallationOctokit(installationId)
+      meta = await fetchRepoMeta(octo, owner, repo, defaultBranch)
+    } catch {
+      throw new HTTPException(502, {
+        message:
+          "Couldn't verify support — GitHub didn't respond. Try again.",
+      })
+    }
+    const violations = checkSupportMatrix({
+      packageJson: meta.packageJson,
+      lockfileName: meta.lockfileName,
+    })
+    if (violations.length > 0) {
+      return c.json({ kind: "unsupported" as const, violations }, 422)
+    }
   }
 
   // UNIQUE(github_install_id, github_repo_id): a repo previously disconnected
