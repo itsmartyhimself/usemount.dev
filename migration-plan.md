@@ -2,7 +2,7 @@
 
 ## Context
 
-The frontend is feature-complete at the UI/styling layer but runs entirely on hardcoded demo data. The architecture is fully locked in `architecture-brief.md` and `dashboard-build-plan.md` — an 8-step build sequence, Supabase + Railway + GitHub App, ephemeral builds, react-docgen-typescript manifest generation. None of the external infra is provisioned, none of the backend is wired. The migration replaces demo data sources with live ones following the existing plan, with the cutline at **end of Step 5 (Robust MVP)** — a real repo connectable, real sync running, manifest auto-generation honest enough for the first two real clients (Persona A/C).
+The frontend is feature-complete at the UI/styling layer but runs entirely on hardcoded demo data. The architecture is fully locked in `architecture-brief.md` and `dashboard-build-plan.md` — an 8-step build sequence, Supabase + Railway + GitHub App, ephemeral builds, ts-morph-checker manifest generation (PR6 inverted PR4's rdt-primary default; rdt stays as cross-check). None of the external infra is provisioned, none of the backend is wired. The migration replaces demo data sources with live ones following the existing plan, with the cutline at **end of Step 5 (Robust MVP)** — a real repo connectable, real sync running, manifest auto-generation honest enough for the first two real clients (Persona A/C).
 
 Two things the user named are already resolved in the docs:
 - **The "install something into customer git"** = a GitHub App (`usemount.dev`) customers install per-repo. **No package goes into customer code.** Optional `mount.config.ts` at repo root is config only.
@@ -128,7 +128,7 @@ Per-job worker:
 2. Detect components dir + globals.css. Try `mount.config.ts` first; fall back to `src/components`, `components`, `app/components`. If both fail, write `build_jobs.error = 'no_components_dir'` and surface in UI via the "couldn't find components" connect screen.
 3. Diff against `instances.last_synced_commit_sha` to get changed component files (first-sync = all components).
 4. Run esbuild per-component (shared deps graph). Output per-component JS + extracted CSS.
-5. Run `react-docgen-typescript` on each component → emit a `ComponentManifest` from `@usemount/shared` (the moved type).
+5. Run the **ts-morph checker** (PR6 D2 inversion — primary; rdt optional cross-check) on each component → emit a `BuildManifest` from `@usemount/shared` (build-side; the render-side `ComponentManifest<P>` is the iframe→host contract from Step 4.3).
 6. Upload bundles to Supabase Storage; insert/update `component_manifests` rows with artifact URL + `source_hash`.
 7. Update `instances.last_synced_commit_sha` and `last_synced_at`. Destroy sandbox.
 
@@ -154,7 +154,7 @@ Per `dashboard-build-plan.md` Step 5 + `architecture-brief.md` §11.
 1. **Provider auto-detect**: build worker scans `app/layout.tsx` (or equivalent). If `ThemeProvider`, `QueryClientProvider`, `NextIntlProvider`, etc. wrap `{children}`, generate a `providers.auto.tsx` wrapper file in the bundle and apply it in the iframe runtime. Common providers covered: theme, react-query, next-themes, next-intl, jotai/zustand stores.
 2. **`canvas.providers.tsx` fallback**: when present at customer repo root, build worker copies it into the bundle. Iframe wraps every component with it before render.
 3. **`Component.canvas.tsx` override file**: per-component opt-in enrichment. If `Button.canvas.tsx` exists next to `Button.tsx`, its exported `controls` merge into / override the auto-generated manifest's controls. Document the surface in `docs/canvas-overrides.md`.
-4. **Generics / discriminated unions**: `react-docgen-typescript` chokes on these. Detect → emit manifest with `controls: {}` (renders at default, no toggle rows) → mark in UI as "limited introspection". Component still appears, still previews.
+4. **Generics / discriminated unions**: under the PR6 checker engine, discriminated unions become typed read-only rows (every resolved prop appears in the panel — the D1 hybrid scope). Truly generic components (`DataTable<T>`) still emit `introspectionGap='generic'` for the unconstrained T; non-T props still resolve normally. Component renders + non-generic props show in the panel.
 5. **Failure-mode dispositions**: implement the eight cases in `architecture-brief.md` §3:
    - RSCs detected → "Server component — not supported" leaf
    - Build-fail components → grayed leaf with inline error
@@ -1143,5 +1143,439 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       all flip "rdt primary" → "checker-backed primary, rdt optional cross-
       check". 4.3/4.4 + Step 5 + R7/R9 hosted cutover all remain explicitly OUT
       of scope of PR6.</next>
+  </pr>
+
+  <pr id="6" branch="feat/migration-step-4.2" base="staging" covers="Step 4.2"
+      verified="builds+harness-live+e2e+boot-smoke" date="2026-05-20">
+    <secrets-policy>No secrets in repo. A session-only Supabase PAT was supplied
+      by the owner at PR6 kickoff to apply 0003_build_jobs_lease.sql (Management
+      API only); staged to /tmp/usemount-sb-pat mode-600, never echoed back,
+      never written to any committed file, shredded at hand-back. The owner
+      deletes the PAT in the Supabase dashboard on done-report (R2). The PR6
+      harness (verify-build-worker.ts) writes sentinel rows (github_install_id=
+      999_999_999_981, branch "test/pr6-worker") to live hosted DB and tears
+      them down via ON DELETE CASCADE in a finally block — verified clean after
+      the run (0 leftover_conns, 0 leftover_insts, 0 leftover_jobs). All
+      GitHub App env (PEM, webhook secret, App-JWT) remains untouched in
+      apps/api/.env.local; never leaves the local process.</secrets-policy>
+
+    <decisions>
+      <decision id="D1" name="panel-completeness scope" answer="hybrid">
+        Owner-chosen at PR6 kickoff via ask-user-question skill: expand
+        BuildManifestControls with interactive `string` (text input) and `number`
+        (number input) row kinds for the common cheap widgets, AND typed
+        read-only rows for `handler` (function signature display) and `object`
+        (type-string display). Every checker-resolved prop yields a row; rich
+        invoke/JSON-editor widgets for handler/object defer to Step 5. The 4.3
+        canvas inherits four new row kinds. Gate = "no component with
+        resolvable props ever shows an empty panel; only sanctioned residuals
+        (truly-propless helpers + unconstrained generic T) legitimately empty".
+        Hits the owner's non-negotiable without building a JSON editor in v1.
+      </decision>
+      <decision id="D2" name="doc inversion rdt→checker" answer="LANDED in PR6,
+        owner-driven, SUPERSEDES the 4.2-prep introspection-truth clause's
+        'ship accepting the empty-panel fraction' alternative">
+        The 4.2-prep migration-log entry's `<introspection-truth>` clause
+        offered the owner a choice: raise the introspection rate in 4.2/Step-5,
+        OR ship accepting that ~2 of 3 real components would render with an
+        EMPTY controls panel under rdt-primary. The owner rejected the
+        empty-panel option as product-breaking. PR6 implements the rate-raise
+        via D2: ts-morph CHECKER is the PRIMARY introspection engine;
+        react-docgen-typescript becomes the OPTIONAL cross-check on Button only
+        in the spike. The checker walks the exported component's call-signature
+        parameter type, so it resolves THROUGH forwardRef/HOC AND follows
+        cross-file / node_modules aliases via the customer's tsconfig — closing
+        external-union (the dominant 14/29 gap on REV-Plugin under rdt) and
+        forwardref-unresolved (3/29) to zero. Numeric gate measured: see
+        `<verification>` below. The doc inversion (architecture-brief.md §3
+        + §11 ×3, dashboard-build-plan.md Step 4 + "Decisions still open" #1,
+        migration-plan.md Context + Step 4.2 + Step 5 generics clause) is part
+        of commit 2; spike.ts's FINDING comment was already flipped in commit 1.
+        This addendum supersedes the "ship accepting the empty-panel fraction"
+        alternative in &lt;pr id="4"&gt;'s 4.2-prep `<introspection-truth>` —
+        treat this as the new source of truth.
+      </decision>
+      <decision id="lease-rpc" name="0003 SECURITY DEFINER + lockdown"
+        answer="hardened">
+        PostgREST can't express `FOR UPDATE SKIP LOCKED`, so the atomic
+        worker lease lives behind a SECURITY DEFINER RPC. Pattern (advisor-
+        confirmed): `SET search_path = public, pg_temp` on the function
+        (closes the schema-injection vector the Supabase linter flags on
+        SECURITY DEFINER); `RETURNS SETOF public.build_jobs` (caller uses
+        `.maybeSingle()`, gets `null` on empty queue — no error on missing
+        record); `REVOKE ALL ... FROM PUBLIC, anon, authenticated` (Supabase
+        default-privileges grant EXECUTE to anon/authenticated on every
+        public.* function — REVOKE PUBLIC alone does NOT catch those
+        role-specific grants, so they need explicit REVOKE; without them an
+        anonymous request could call the SECURITY DEFINER and lease a job).
+        GRANT EXECUTE only to service_role. Verified live via
+        `has_function_privilege` — service=true, anon=false, authenticated=
+        false, public=false. NO heartbeat RPC — heartbeat is a plain
+        PostgREST update gated on (id, worker_id, status='running'); affected-
+        row count = 0 means stolen-lease detection, abort current job.
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Pre-PR6 audit (Explore agent + parallel reads + /advisor) of PR5 + carry-
+      forward PR4 + 4.0b + 4.2-prep re-confirmed sound: webhook.ts raw-body
+      HMAC + length-checked timingSafeEqual + 401-before-parse + lifecycle
+      dispatch + push branch positioned correctly; push-enqueue.ts discriminated
+      `PushEnqueueOutcome` union + 10 skip reasons + 23505 dedup catch + fan-out
+      over active connections; rate-limit.ts token-bucket per (kind,key) with
+      deterministic `nowMs` test hook + documented eviction caveat;
+      app.ts/buildApp() extraction clean + index.ts no worker loop (PR6 adds);
+      verify-push-webhook.ts in-process import pattern (load .env.local AFTER
+      static imports — lazy accessors safe); 0002 partial UNIQUE index live in
+      hosted DB (verified via pg_indexes: WHERE status IN ('queued','running'));
+      installation-ownership.ts hard-denies Org/Enterprise from BOTH callback
+      AND connections route; spike.ts has the working `tsMorphProbe` proof
+      (lifted into the worker's introspect.ts in PR6). Hosted DB pre-state clean
+      (0 build_jobs rows, 0002 + queue_idx + instance_idx + pkey indexes all
+      verified). No drift, no holes, audit-clean. The doc-inversion gap (D2) is
+      the only carry-forward owner-decision PR6 closes.
+    </audit-findings>
+
+    <step-4.2 title="the build worker">
+      <db>
+        supabase/migrations/0003_build_jobs_lease.sql — SECURITY DEFINER function
+        public.lease_next_build_job(p_worker_id text) RETURNS SETOF
+        public.build_jobs. Atomic lease via FOR UPDATE SKIP LOCKED on a
+        sub-SELECT, predicate `(status='queued') OR (status='running' AND
+        leased_at &lt; now() - interval '10 min')` so a crashed worker's stale
+        lease re-claims in one atomic UPDATE. SET search_path = public, pg_temp.
+        REVOKE ALL FROM PUBLIC, anon, authenticated; GRANT EXECUTE TO service_role.
+        Applied via Management API POST /database/query (same triple-
+        precedented pattern as PR2/4.2-prep/PR5); verified live via pg_proc
+        (prosecdef=true, proconfig=[search_path=public, pg_temp]) and
+        has_function_privilege (service=true, anon/auth/public=false).
+      </db>
+      <code>
+        NEW packages/shared/src/build-manifest.ts — BuildManifestControls
+        expanded per D1: existing variants/sizes/forms/booleans/slots stay; ADD
+        interactive `strings: Array&lt;{prop}&gt;`, `numbers: Array&lt;{prop}&gt;`,
+        plus typed read-only `handlers: Array&lt;{prop, signature}&gt;`,
+        `objects: Array&lt;{prop, typeString}&gt;`. The 4.3 canvas inherits
+        these four new row kinds.
+
+        NEW apps/api/src/build/introspect.ts — the checker-primary engine
+        (PR6 D2). PROP_CAP=40, PropKind discriminated union (boolean | string |
+        number | literal-union | react-node | handler | object | unknown),
+        CheckerProp/CheckerResult shapes, classifyPropKind (react-node FIRST,
+        handler before object, strip undefined via getNonNullableType before
+        primitive checks, union-of-literals via getUnionTypes()+getLiteralValue,
+        complex union/intersection → typed read-only `object`), introspectComponent(project, entry)
+        (init Project ONCE; addSourceFileAtPath; getExportedDeclarations →
+        first PascalCase with callable signature → first param's
+        getTypeAtLocation), deriveControls (every resolved prop yields a row),
+        classifyGap (only fires for sanctioned residuals). Spike.ts now imports
+        from this module — the spike is a live regression harness for the engine
+        the worker runs (advisor-recommended factor).
+
+        NEW apps/api/src/build/types.ts — BuildJob / InstanceRow /
+        RepoConnectionRow narrow projections of the DB row shapes the worker reads.
+
+        NEW apps/api/src/build/lease.ts — leaseNextJob(workerId) via
+        supabaseAdmin.rpc('lease_next_build_job').maybeSingle&lt;BuildJob&gt;();
+        heartbeat(jobId, workerId) = plain PostgREST update gated on
+        (id, worker_id, status='running'), returns true on affected-rows&gt;0
+        (lease still owned), false on 0 (stolen — caller aborts);
+        completeJob/failJob set succeeded/failed + finished_at + duration; failJob
+        truncates error to 4000 chars (no TOAST blowups).
+
+        NEW apps/api/src/build/clone.ts — shallowClone({repoFullName,
+        commitSha, installToken}) via child_process.spawn('git', ...) (no new
+        dep; git is on the worker container by definition — advisor #5).
+        Pattern: `git init` + `remote add` + `fetch --depth=1 --no-tags
+        --filter=blob:none origin &lt;sha&gt;` + `checkout FETCH_HEAD` —
+        works for any commit GitHub serves, not just branch HEADs. Auth via
+        `https://x-access-token:&lt;token&gt;@github.com/&lt;repo&gt;.git`.
+        `GIT_TERMINAL_PROMPT=0` + `GIT_ASKPASS=echo` so a bad token never
+        prompts. Token scrubbed from any stderr surfaced to build_jobs.error.
+
+        NEW apps/api/src/build/deps.ts — detectLockfile (pnpm-lock.yaml /
+        package-lock.json / yarn.lock / bun.lockb) → installDeps with
+        --ignore-scripts + lockfile-frozen flags. THE control against
+        customer-postinstall RCE. node_modules cache keyed by
+        (repo_id, sha256(lockfile)) on a PERSISTENT volume (NODE_MODULES_CACHE
+        env, default /var/lib/usemount/node-modules-cache, NOT tmpfs). Cache
+        hit = cpSync; cache miss = install + best-effort cache write.
+        Registry-malicious-dep library code that runs at BUNDLE time remains
+        the residual (real containment = 4.3 iframe sandbox).
+
+        NEW apps/api/src/build/mount-config.ts — STATIC AST parse via ts-morph.
+        Allowed keys = {componentsDir, globalsCss, hidden}; values must be
+        StringLiteral or ArrayLiteralExpression of StringLiteral. Rejects
+        CallExpression / Identifier / TemplateExpression / spread / computed
+        names / unknown keys with explicit error messages. Fallback chain when
+        no mount.config.ts: src/components → components → app/components (and
+        globals.css candidates app/globals.css, src/app/globals.css,
+        styles/globals.css). NEVER import()/eval — the config file is customer
+        source code; executing it would be RCE on the worker AND the iframe
+        (4.3). Verified by 4 harness cases (case 10-13).
+
+        NEW apps/api/src/build/bundle.ts — bundleComponent + bundleGlobalsCss
+        via esbuild. CRITICAL: passes `tsconfig: opts.tsconfigPath` so esbuild
+        inherits the customer's compilerOptions.paths (architecture-brief §287)
+        — NOT the spike's PR4 `alias:{'@':ALIAS_BASE}` hardcode (advisor #6).
+        Customer codebases with `~components/*`-style aliases would silently
+        fail otherwise and look like component bugs. external=
+        ['react','react-dom','react/jsx-runtime']; format=esm; jsx=automatic;
+        minify=true. CSS extraction via loader:{'.css':'css'} (per-component
+        imports of stylesheets get a sibling .css output); globals.css bundled
+        once per artifact set (Tailwind v4 + globals.css per v1 support
+        matrix). E2E gate confirmed 154KB Button bundle (213ms) resolves the
+        `@/*` alias via tsconfig.
+
+        NEW apps/api/src/build/storage.ts — uploadJs + uploadCss to the
+        `component-artifacts` bucket (4.2-prep provisioned; private, 50 MiB).
+        Service-role bypasses Storage RLS (read-path signing is 4.3 scope).
+        Keys = `instance_id/slug.&lt;source_hash&gt;.{js|css}` with `upsert:
+        true` for idempotent retry.
+
+        NEW apps/api/src/build/manifests.ts — syncManifests UPSERT on
+        (instance_id, slug) + computes set-difference and DELETEs rows whose
+        slugs are not in the current build (otherwise renamed/removed
+        components leave ghost rows in the sidebar forever).
+
+        NEW apps/api/src/build/worker.ts — startWorkerLoop() returns
+        {workerId, stop, done}. Advisor lifecycle pattern: while-loop on
+        shuttingDown flag (loop returns naturally — no process.exit from
+        inside), heartbeat setInterval stored and clearInterval'd in finally
+        (event-loop liveness), orphan-sweep at startup (clean /tmp/usemount-
+        build-* from crashed workers), per-job pipeline (lease → fetch
+        instance + repo_connection → install token → shallow clone → install
+        deps → parse mount.config → init ts-morph Project ONCE → diff vs
+        last_synced_commit_sha via `git diff --name-only` over-approximation
+        (advisor #5; first sync = build all) → for each .tsx entry: introspect
+        → deriveControls → bundleComponent → uploadJs/Css → manifest row.
+        Per-component failure → kind='unsupported', job CONTINUES (handoff
+        STEP 1 #12). globals.css bundled once at the end. syncManifests UPSERT
+        + DELETE stale. update instances.last_synced_*. cloneResult.cleanup()
+        in finally — tmpfs source dir destroyed, persistent node_modules cache
+        preserved. workerId format: `&lt;RAILWAY_REPLICA_ID|local&gt;-&lt;pid&gt;-&lt;ts&gt;`.
+
+        NEW apps/api/scripts/verify-build-worker.ts — 14-case in-process
+        harness (mirrors PR5 verify-push-webhook.ts pattern: import-then-
+        loadEnvFile, sentinel rows with TEST_INSTALL_ID=999_999_999_981 to
+        avoid PR5 collision, teardown via ON DELETE CASCADE on
+        repo_connections in finally). Cases: 1=lease basic queued→running,
+        2=stale lease (&gt;10min) reclaimed, 3=fresh lease (&lt;10min)
+        preserved, 4=FIFO created_at order, 5=null on empty queue, 6=heartbeat
+        refresh, 7=heartbeat false on wrong worker_id (stolen-lease detection),
+        8=completeJob succeeded+duration+finished_at, 9=failJob failed+error
+        truncated to 4000+duration, 10=mount-config CallExpression rejected,
+        11=mount-config Identifier rejected, 12=mount-config unknown-key
+        rejected (allowlist enforced), 13=mount-config fallback resolves
+        src/components, 14=valid mount.config.ts parses + resolves.
+
+        NEW apps/api/scripts/e2e-fresh-clone.ts — informational E2E exercising
+        the load-bearing new pieces (installDeps + bundleComponent with
+        tsconfig path inheritance) against a `git clone` of usemount.dev to
+        /tmp/usemount-fresh-clone (no node_modules; matches worker post-
+        shallow-clone state). Validates installDeps pnpm path + the worker's
+        bundle (NOT the spike's `alias` shortcut) on a real customer-like tree.
+
+        MOD apps/api/src/index.ts — buildApp() unchanged; ADD startWorkerLoop()
+        alongside serve() (worker enabled by default; DISABLE_BUILD_WORKER=1
+        opts out for routes-only dev). Single source of process lifecycle:
+        process.once('SIGTERM'/'SIGINT') → worker.stop() → await worker.done →
+        httpServer.close() → process.exit(0). Worker no longer installs its
+        own signal handlers (single source).
+
+        MOD apps/api/scripts/spike.ts — inverted to checker-primary by importing
+        introspectComponent/deriveControls/classifyGap/PROP_CAP from
+        ../src/build/introspect.js (engine factored out). rdt stays imported
+        for the Button head-to-head cross-check only. FINDING comment flipped
+        to record D2 inversion (owner-driven, supersedes 4.2-prep's "ship
+        accepting the empty-panel fraction"). Spike is now the live regression
+        harness for the worker's engine.
+
+        MOD apps/api/package.json — added `verify:build-worker` and
+        `e2e:fresh-clone` script targets; no new deps (ts-morph, esbuild,
+        react-docgen-typescript already devDeps from PR4; @octokit/auth-app +
+        @supabase/supabase-js already deps from PR3+PR2; git via
+        child_process.spawn — advisor #5).
+
+        MOD docs/ — D2 inversion landed in commit 2: architecture-brief.md
+        (5 mentions of rdt-primary flipped to checker-primary), dashboard-
+        build-plan.md (Step 4 spec + "Decisions still open" #1), migration-
+        plan.md (Context + Step 4.2 prose + Step 5 generics clause).
+      </code>
+    </step-4.2>
+
+    <deviations>
+      - PR6's worker.ts uses a separate `processJob(job, workerId, isStolen)`
+        helper instead of inlining — keeps the loop readable and lets the
+        stolen-lease check thread through each pipeline stage (we abort early
+        when heartbeat detects another worker has reclaimed the job).
+      - introspect.ts is a fresh module rather than a generalisation of the
+        spike's `tsMorphProbe`. The spike's `tsMorphProbe` was a Button-only
+        probe returning string[]; the production engine needs rich PropKind
+        classification + propsSchema + gap diagnostics, so a clean module
+        was the right shape (advisor-recommended factor; spike imports from
+        it now — single source).
+      - `lease_next_build_job` predicate uses `(status='queued') OR
+        (status='running' AND leased_at &lt; now() - interval '10 min')` so a
+        crashed worker's stale 'running' lease reclaims atomically. The
+        canonical migration-plan.md Step 4.2 prose has the predicate as
+        `status='queued' AND (leased_at IS NULL OR leased_at &lt; now() - 10 min)`
+        — that doesn't reclaim stale 'running' (status would be 'running',
+        not 'queued'); without the disjunction, a crashed worker would block
+        the queue forever (0002 dedup index would also deduplicate new pushes
+        against the dead 'running' row). PR6's predicate is the correct
+        operational shape; spec prose's intent is preserved (stale leases
+        reclaim) but the SQL form is fixed.
+      - DISABLE_BUILD_WORKER=1 env opt-out added for dev sessions that only
+        touch routes — not in the handoff, but minor and non-breaking
+        (default behavior: worker enabled).
+      - No `simple-git` dependency — `child_process.spawn('git', ...)` works
+        and avoids a new dep per CLAUDE.md "prefer what is already in
+        package.json" + advisor #5.
+      - Mount-config `globalsCss` fallback chain extended beyond the spec
+        (app/globals.css / app/global.css / src/app/globals.css /
+        styles/globals.css) to cover common Next.js project layouts. Custom
+        v1-only deviation; trivial.
+    </deviations>
+
+    <verification gate="PR6" result="PASS">
+      Spike numeric gate (checker-primary engine, post-install state):
+      - dogfood (Tailwind v4, 79 components): introspection-gap histogram =
+        {no-props-interface: 25}; external-union=0, forwardref-unresolved=0,
+        large-base-type=0. RICH = 54/79 (68%); the 25 no-RICH are propless
+        helpers (canvas-background, sidebar-divider, etc.) — sanctioned.
+        Every component WITH props has at least one row.
+      - REV-Plugin (Tailwind v3, 29 components — out-of-matrix for CSS but
+        THE lever for external-union): histogram = {large-base-type: 1,
+        no-props-interface: 2}; external-union=0 (was 14 under rdt-primary in
+        4.0b — D2 lever closed), forwardref-unresolved=0 (was 3). The 1
+        large-base-type is the sanctioned ui-animate-ui-slot Radix-Slot
+        re-export — PROP_CAP=40 fires correctly, panel still rich at 40 rows
+        (5 booleans, 23 strings, 1 number, 10 objects, 1 variant). RICH =
+        27/29 (93%); the 2 no-RICH are Radix wrappers without their own props
+        interface (ui-popover, ui-tooltip) — sanctioned. Up from 4.0b's 34%.
+      - dogfood with node_modules deleted (the worker pre-install state):
+        forwardref-unresolved=9, bundled=19/79 — confirms the worker's
+        install step is LOAD-BEARING. The engine degrades gracefully
+        without deps installed; the worker's `--ignore-scripts --frozen-
+        lockfile` install MUST precede introspect+bundle. Mission: confirmed.
+
+      verify-build-worker.ts harness (live hosted DB): 14 cases PASS.
+      Sentinel teardown clean: leftover_conns=0, leftover_insts=0,
+      leftover_jobs=0.
+
+      e2e-fresh-clone.ts on /tmp/usemount-fresh-clone: pnpm install
+      --ignore-scripts --frozen-lockfile 35s (cold), Button checker = 14
+      props in 513ms with gap=none + variants/sizes/forms/3-booleans/string/
+      handler/slot rows all resolved, bundleComponent 154KB JS in 213ms
+      (tsconfig path inheritance for `@/*` working — NOT the spike's `alias`
+      shortcut).
+
+      Port-boot smoke (`PORT=4001 tsx src/index.ts`): both `[worker:local-...]
+      startup` AND `usemount.dev API running on port 4001` logged; `/health
+      → {"ok":true}` HTTP 200; SIGTERM → `[main] SIGTERM — shutting down` →
+      `[worker:...] explicit stop — finishing current job, then exiting` →
+      process exit clean; build_jobs row count = 0 after teardown.
+
+      0003 verified live: pg_proc.prosecdef=true, proconfig=[
+      'search_path=public, pg_temp'], args='p_worker_id text', ret='SETOF
+      build_jobs'. has_function_privilege: service=true, anon=false,
+      authenticated=false, public=false.
+
+      Builds GREEN: pnpm --filter @usemount/shared build (tsc -b) clean;
+      pnpm --filter @usemount/api build (tsc -b) clean; pnpm --filter
+      @usemount/web exec tsc --noEmit clean; pnpm --filter @usemount/web
+      build (next build) 9 routes incl. ƒ Proxy (Middleware) intact.
+
+      NOT exercised (deferred, R7/R9): hosted GitHub clone via real install
+      token, Railway deploy of the worker loop, real push → build_job →
+      worker pipeline end-to-end. The fresh-clone E2E uses a LOCAL clone
+      (git clone the dogfood to /tmp) — same FS state the worker sees post-
+      shallowClone, but skips the GitHub leg. A genuine fresh-clone-from-
+      GitHub run lives behind R7/R9.
+    </verification>
+
+    <known-risks>
+      Carry-forward from PR3/PR4/PR5:
+      - R1 two-app footgun stands (apps/api uses ONLY the GitHub App; the
+        OAuth App is only for Supabase sign-in).
+      - R7 apps/api never deploy-verified — first staging→main is first
+        hosted run; PR6 adds a long-running worker loop alongside the HTTP
+        server, which is a NEW Railway-deploy concern (not just HTTP).
+      - R9 cors('*') untouched + GitHub App Setup/Webhook URLs unset
+        (Setup → web /connect/callback, Webhook → api /github/webhook). No
+        new App event subscription needed (push is auto-delivered).
+      - R2 PAT used to apply 0003 must be deleted in Supabase dashboard by
+        owner now (same triple-precedent pattern as PR2/4.2-prep/PR5).
+      - Rate-limit in-memory Map (PR5) never evicts — v1-accepted, multi-
+        replica swap to Redis when needed.
+
+      PR6-introduced:
+      - **node_modules cache eviction unsolved** (advisor-flagged): keyed by
+        (repo_id, sha256(lockfile)) on a persistent volume; grows unbounded
+        over time. Step 5 owns the LRU question. v1-accepted; at two-customer
+        scale the cache is a few GB.
+      - **Worker SIGTERM/SIGINT handler is `process.once(...)`** — first
+        signal triggers graceful shutdown; a second signal during shutdown
+        will be the default handler (kill). Acceptable for v1.
+      - **Stale-lease 10-min window**: a network hiccup that drops a 2-min
+        heartbeat for &gt;10 min could let another worker reclaim a still-
+        alive job → double-build. Conservative window; revisit if hosted
+        traffic data shows it's real.
+      - **No retry on transient bundle/upload failures** — per-component
+        failures mark `kind='unsupported'` and the job succeeds with the
+        rest. v1-accepted; per-component retry is Step 5 polish.
+      - **`git diff` over-approximation**: any change outside the components
+        dir → rebuild all. Cheaper than reverse-walking esbuild metafiles
+        for shared-dep tracking; the more precise approach is Step 5.
+      - **Worker pulls fromSha via shallow clone of only toSha** — the
+        diff against last_synced_commit_sha will fail (commit not present)
+        and conservatively rebuild all. Acceptable for v1; widening the
+        clone to include fromSha is Step 5 polish.
+      - **The PR6 fresh-clone E2E uses a LOCAL clone** — a genuine fresh-
+        clone-from-GitHub run via the install token lives behind R7/R9.
+      - **mount.config.ts auto-detect from monorepo root won't find a
+        nested components dir** (the dogfood lives at apps/web/components/
+        live, not src/components). Step 5 surfaces this as a setup screen.
+
+      Pre-existing, not yours to fix:
+      - `[branch]` vs `[...branch]` slug routing.
+      - Non-unique slug scheme (v1-safe).
+      - `pnpm lint` fails on PR2's nav-avatar.tsx (missing
+        @next/eslint-plugin-next) — `next build` is the real gate.
+    </known-risks>
+
+    <next>
+      PR7 = Step 4.3 (iframe runtime + canvas wiring + sandbox hardening):
+      `apps/web/app/preview/[manifestId]/route.ts` serves a minimal HTML doc
+      that mounts the bundle + supplies router + theme defaults; iframe gets
+      `sandbox="allow-scripts"` WITHOUT `allow-same-origin`; strict CSP
+      `default-src 'none'; script-src 'self' &lt;storage-domain&gt;; style-
+      src 'self' 'unsafe-inline'; connect-src 'none'; frame-ancestors 'self'`;
+      narrow typed `postMessage` protocol (init, setProps, error, ready);
+      rewire `DEMO_REGISTRY` → Supabase query keyed on instance_id; delete
+      `lib/registry/data.ts` once provider reads real data; the 4.3 canvas
+      panel must render the new D1 row kinds (string text-input, number
+      input, handler/object typed read-only). THE crown-jewel security
+      surface; gets its own focused handoff. PR8 = Step 4.4 (Realtime
+      stale-viewer — replace `stale-viewer-trigger.tsx` 30s setTimeout with
+      supabase.channel('instance:...').on('postgres_changes')).
+
+      Step 5 (manifest auto-generation polish): provider auto-detect from
+      `app/layout.tsx`, `canvas.providers.tsx` fallback,
+      `Component.canvas.tsx` per-component overrides, failure-mode
+      dispositions (architecture-brief §3 cases 1–7), support-matrix
+      connect-gate (Tailwind v3 / Next 15 must be REFUSED at connect time —
+      REV-Plugin proved this gate is load-bearing), stale-instance
+      reconciler (every N hours), node_modules cache LRU eviction.
+
+      R7/R9 = coordinated hosted cutover (Railway deploy + GitHub App Setup
+      URL + Webhook URL + CORS lock + custom-domain DNS). Worth doing as one
+      coherent gate, not piecemeal.
+
+      Before PR7: confirm PAT was deleted in Supabase dashboard; if a 0004+
+      migration or Storage RLS policy is needed there, request a fresh
+      session-only PAT (triple-precedent + advisor pattern).
+    </next>
   </pr>
 </migration-log>
