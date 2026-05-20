@@ -2791,4 +2791,442 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       that was skipped; shred + deletion still applies for hygiene).
     </next>
   </pr>
+
+  <pr id="10" branch="feat/migration-step-5.2" base="staging" covers="Step 5.2 + 1 PR9 correction + 2 PR7/PR8 audit NITs"
+      verified="builds+harness+no-regression+boot-smoke+tick-smoke" date="2026-05-20">
+    <secrets-policy>No Management API or live DB writes required beyond
+      the existing service-role harness pattern. No PAT requested or
+      staged this session — PR10 is runtime additions (reconciler module
+      + harness) and a small constant change (KNOWN_LOCKFILES). The
+      service-role admin client (already in env) is sufficient for the
+      live-DB verify-reconciler harness sentinels.</secrets-policy>
+
+    <decisions>
+      <decision id="scope" name="PR10 bundling: reconciler-only vs reconciler + audit fixes"
+                answer="(A) bundled — reconciler + bun.lock + 2 deferred NITs">
+        STEP 0a audit found one PR9-introduced false-negative
+        (bun.lock missing from KNOWN_LOCKFILES — refuses real Bun-1.2+
+        customers) and re-confirmed the 2 PR9 NITs deferred at PR9
+        kickoff. All three are small (1 LOC + 5 LOC + 1 LOC) and
+        the reconciler is ~250 LOC, so bundling stays within "focused
+        sub-PR" guidance from the chain handover. Owner picked A at
+        ask-user-question kickoff. Migration-log shape mirrors the
+        existing &lt;correction pr="2"&gt; precedent: the bun.lock fix
+        gets its own &lt;correction pr="9"&gt; clause inside this
+        PR10 entry; the NITs are documented in &lt;step-5.2&gt; prose
+        as defense-in-depth cleanup; the reconciler is the main scope.
+      </decision>
+      <decision id="fetchHead" name="how the reconciler harness verifies drift detection"
+                answer="dependency-injected fetchHead seam — harness stubs without hitting real GitHub">
+        Two options weighed: (a) call real GitHub via App Octokit against
+        a public repo (realistic but flaky on rate limits / network
+        blips), (b) accept a `fetchHead` injection point on
+        `runReconciler({ fetchHead })` so the harness can stub it
+        per-branch (clean, deterministic, no external dep). Advisor +
+        kickoff-doc both recommended (b). Default `defaultFetchHead`
+        wraps `octokit.repos.getBranch(...)` and discriminates 404
+        (returns null — "branch deleted / install lost access", skip
+        without erroring) vs other failures (throws — caller increments
+        the per-instance errors counter and continues).
+      </decision>
+      <decision id="interval" name="reconciler scheduling: setInterval vs cron"
+                answer="setInterval in-process at 2h, env-tunable, first tick +1min">
+        setInterval is the cheapest v1 scheduler — Railway cron adds
+        infra. Architecture-brief §11 specifies 2h. First tick fires
+        ~1 min after startup so any drift accumulated while the
+        process was down gets enqueued promptly (without slamming the
+        process during boot). The interval + first-delay are env-
+        tunable via `RECONCILER_INTERVAL_MS` and
+        `RECONCILER_FIRST_DELAY_MS` so (i) operators can dial them
+        without redeploys and (ii) the tick-smoke can prove the
+        setTimeout chain at 2s. A `running` flag prevents two ticks
+        in flight if a tick ever outlasts the interval (defensive at
+        scale; can't happen at v1 timing).
+      </decision>
+      <decision id="disable-flag" name="reconciler enable: paired with worker or independent"
+                answer="independent DISABLE_RECONCILER, mirroring DISABLE_BUILD_WORKER">
+        Mirror PR6's flag pattern. Default = both on. Operator who
+        wants worker-only (dev sandbox) sets DISABLE_RECONCILER=1;
+        operator who wants reconciler-only (separate scheduler
+        process) sets DISABLE_BUILD_WORKER=1. No automatic coupling —
+        simpler contract, no surprise behavior.
+      </decision>
+      <decision id="dedup-23505" name="how the reconciler handles a race against push-webhook (and peer replicas)"
+                answer="catch insErr.code === '23505', silent skip">
+        Load-bearing on 0002's partial UNIQUE index
+        `(instance_id, commit_sha) WHERE status IN ('queued','running')`.
+        Reconciler-vs-push, reconciler-vs-self (multi-replica), and
+        reconciler-vs-in-flight-build all surface as Postgres
+        unique_violation on INSERT — caught and silently skipped (the
+        existing active job will build the same SHA). The harness
+        has a dedicated case re-running the reconciler against an
+        already-enqueued row and asserting enqueued=0 + errors=0 + the
+        existing row count stays at 1.
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Re-verified PR9 line-by-line (5 files, 39-case harness traced) +
+      swept PR1–PR9 known-risks end-to-end per the owner's explicit
+      hand-back framing ("look over any known-risks and security risks
+      etc and evaluate the setup and find solutions"). Parallel Explore
+      agent extracted every flagged item from `&lt;migration-log&gt;`
+      clauses; direct reads confirmed the load-bearing security primitives
+      against their source files.
+
+      PR9 surface — confirmed clean:
+      - support-matrix.ts: extractMajor regex covers `^19.0.0` / `~14.2.0`
+        / `5` / `5.0.0` / `>=4 &lt;5` / `v19.0.0` / `19.0.0-rc.1`; rejects
+        `git+ssh://…` / `workspace:*` / `npm:react@^17` / `link:./pkg`
+        as unparseable. The 6-field check is correct (package-json
+        short-circuit, either-or next-or-vite, presence-only lockfile).
+      - fetch-package-json.ts: 1 MB cap, base64+JSON.parse try/catch,
+        `pkg.data.type === "file"` guard, Array.isArray on root
+        listing — all defensive. 2 Octokit calls max.
+      - connections.ts: gate placement correct (between line 101 409
+        cross-workspace and line 140+ upsert). 502 catch over the whole
+        fetchRepoMeta block. 422 returns `{kind:"unsupported",
+        violations}` matching the frontend type guard.
+      - client.ts: ApiError.body backward-compat; content-type substring
+        check correctly matches `application/json; charset=utf-8` AND
+        `application/problem+json`. Text-only fallback preserved for
+        non-JSON errors.
+      - connect-repo-form.tsx: isUnsupported guard + formatUnsupported
+        handle all 3 reasons (too-old / absent / unparseable). Catch
+        ordering (422 + structured body → other ApiError → non-ApiError)
+        correct.
+
+      PR9 — one confirmed correction, see &lt;correction pr="9"&gt;
+      below: `KNOWN_LOCKFILES` missing `bun.lock`.
+
+      Cross-PR sweep (PR1–PR9 known-risks) — no blockers:
+      - 0001 RLS: workspace policies via SECURITY DEFINER helpers
+        (`is_workspace_member`, `is_workspace_owner`) so the policies
+        are NOT recursive. apps/api service-role bypass is safe because
+        `require-user.ts` enforces ownership in code
+        (assertWorkspaceMember / assertWorkspaceOwner /
+        assertInstallationOwnership).
+      - 0002 dedup: partial UNIQUE on (instance_id, commit_sha) WHERE
+        status IN ('queued','running'). Covers reconciler-vs-push +
+        multi-replica + reconciler-vs-in-flight races for free —
+        this is what makes PR10's "INSERT, swallow 23505" safe.
+      - 0003 lease RPC: SECURITY DEFINER + SET search_path + REVOKE
+        ALL FROM PUBLIC/anon/authenticated + GRANT EXECUTE service_role.
+        Untouched in PR10.
+      - 0004 publication: REPLICA IDENTITY DEFAULT (pkey-only payload.old).
+        PR10 reconciler polls HEAD itself, doesn't depend on Realtime
+        payload.old.
+      - PR5 webhook: HMAC checked via x-hub-signature-256 (correct, NOT
+        the deprecated SHA1 `x-hub-signature`), `timingSafeEqual`,
+        length-guarded before constant-time compare, verify BEFORE
+        JSON.parse. Rate-limit BEFORE HMAC verify (correct order — DoS
+        first, forge after).
+      - PR6 worker: lease + heartbeat + isStolen abort; per-component
+        failures don't kill the job (kind='unsupported', job continues).
+        node_modules cache LRU is a documented v1-accept; not a PR10
+        concern.
+      - PR7 iframe CSP: importmap points only at self-hosted
+        `/preview-runtime/*.mjs`. `script-src 'self' 'nonce-…'
+        https://&lt;storageHost&gt;`. `connect-src 'none'` blocks
+        all fetch/XHR/WS exfiltration. `frame-ancestors 'self'`. The
+        `style-src 'unsafe-inline'` exception is required by customer
+        inline `style={{ ... }}` (documented v1 trade-off; not
+        relaxable v1).
+      - R1 two-app footgun: documented explicitly in auth.ts (the
+        comment block lines 17-18). Architectural by design.
+
+      Prioritised risk register (rolls forward to PR11 handover):
+      - **HIGH**: bun.lock coverage gap — fixed in this PR via
+        &lt;correction pr="9"&gt;.
+      - **MEDIUM**: 2 deferred PR9 NITs — fixed in this PR (see
+        &lt;step-5.2&gt; defense-in-depth section). Refusal logging
+        (PR9), near-miss hints (PR9), monorepo refusal (PR9),
+        node_modules LRU (PR6), multi-replica reconciler stampede
+        (PR10-introduced; covered by 0002 today, polish later) — all
+        Step 5/5.x polish, none blocking.
+      - **LOW (R7/R9 gate)**: CORS lock, GitHub App Setup/Webhook
+        URLs, custom-domain DNS, preview subdomain, Realtime
+        first-deploy publication-settle window. Deferred by design
+        per architecture-brief; do not unilaterally fix.
+
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked +
+      design-philosophy/Design Purgatory/) untouched throughout
+      audit + branch + commit.
+    </audit-findings>
+
+    <correction pr="9" date="2026-05-20">PR9's `apps/api/src/github/
+      fetch-package-json.ts` `KNOWN_LOCKFILES` array recognised
+      `bun.lockb` (legacy binary) but NOT `bun.lock` (the text-based
+      JSONC format Bun 1.1.39 introduced and Bun 1.2+ made the default
+      for `bun init`). Source: Bun docs at
+      `https://github.com/oven-sh/bun/blob/main/docs/pm/lockfile.mdx`
+      — "1.2.0+ it is the default format used for new projects". By
+      today (2026-05-20) the text-default has been default for ~16
+      months; a freshly-`bun init`'d customer ships `bun.lock` (not
+      `bun.lockb`) and would have been refused at the connect-gate
+      with `lockfile: absent` despite having a valid lockfile. False
+      negative. Fix: added `"bun.lock"` to KNOWN_LOCKFILES (before
+      `bun.lockb` so the modern default is preferred) + 1 new harness
+      case in verify-connect-gate.ts asserting `lockfileName: "bun.lock"`
+      passes the matrix on an otherwise-supported stack. Brings the
+      harness to 40/40 (was 39). Also updated the user-facing
+      "required" copy in support-matrix.ts to list `bun.lock, or
+      bun.lockb` so the refusal message is honest about both formats.
+    </correction>
+
+    <step-5.2 title="Webhook reconciler (every-2h drift check)">
+      <code>
+        NEW apps/api/src/build/reconciler.ts — pure async
+        `runReconciler({ fetchHead?: FetchHead })` plus a recurring-tick
+        scheduler `startReconcilerLoop()` exported for mounting in
+        src/index.ts. The pure function loops active+pinned
+        repo_connections+instances, fetches each pinned branch's live
+        HEAD via the App Octokit, INSERTs build_jobs(status='queued')
+        on drift, swallows 23505 (dedup against push-webhook + peer
+        replicas + in-flight builds via 0002's partial UNIQUE),
+        catches per-instance errors so one bad repo doesn't kill
+        the tick. Returns {checked, enqueued, errors}. The scheduler
+        wraps the pure function in setTimeout-chain (not setInterval,
+        so a slow tick can't overlap) with `running` flag,
+        `stopped` flag, and a `done` Promise for clean shutdown.
+        FIRST_TICK_DELAY_MS + TICK_INTERVAL_MS are env-tunable via
+        `RECONCILER_FIRST_DELAY_MS` + `RECONCILER_INTERVAL_MS`
+        respectively (defaults 60s + 2h per architecture-brief §11);
+        the tick-smoke proves the chain at 2s+2s.
+
+        MOD apps/api/src/index.ts — mounts startReconcilerLoop()
+        alongside the existing worker. DISABLE_RECONCILER=1 flag
+        mirrors DISABLE_BUILD_WORKER (independent — operator can run
+        either subsystem alone). Shutdown cascade: SIGTERM →
+        reconciler.stop() (clears the timer) + worker.stop() (sets
+        shutdown flag) → await worker.done → await reconciler.done
+        → httpServer.close().
+
+        NEW apps/api/scripts/verify-reconciler.ts — in-process harness
+        against the live service-role DB. Sentinel range
+        999_999_999_941 / 942 / 943 (distinct from PR5/PR6/PR7/PR8/PR9).
+        20 cases across 3 scenarios:
+          - case A (drift / no-drift / 404 / throw / filter): seeds an
+            active connection with 5 instances (drift + nodrift +
+            unpinned + 404 + throw) + an inactive connection with 1
+            pinned instance. Stubs fetchHead per branch. Asserts
+            checked=4, enqueued=1, errors=1; asserts fetchHead NEVER
+            called for unpinned + inactive-connection instances;
+            asserts build_jobs rows present only for the drift
+            instance.
+          - case B (23505 swallow): re-runs the reconciler with the
+            drift's row still queued from case A. Asserts enqueued=0,
+            errors=0 (23505 is not an error), and the existing row
+            count stays at 1. Proves the multi-replica + reconciler-vs-
+            push race resolution.
+          - case C (zero active connections): deactivates everything,
+            re-runs. Asserts all counters zero and fetchHead never
+            called. Proves the empty-state degenerates cleanly.
+        Teardown: CASCADE on repo_connections + leftover-conns assert
+        (same pattern as the PR8-NIT fix below).
+
+        MOD apps/api/package.json — added `verify:reconciler` script.
+        No new deps; reconciler reuses `@octokit/rest` already in
+        dependencies (PR3).
+
+        Defense-in-depth NIT cleanup (deferred from PR9 audit):
+
+        MOD apps/web/app/preview/[manifestId]/route.ts — added
+        `x-frame-options: SAMEORIGIN` to the errorResponse() headers
+        so it mirrors the success branch (line 127). The error page
+        renders only a short error string (no iframe-able content) so
+        the practical risk was nil, but the consistency is documentation-
+        friendly for future readers + scanners. ~1 LOC.
+
+        MOD apps/api/scripts/verify-realtime.ts — added explicit
+        `assert("teardown left no sentinel repo_connection", count===0)`
+        after the CASCADE delete. The CASCADE is correct by
+        construction; the assertion is defense-in-depth against a
+        future FK-shape change silently leaving orphans behind for
+        the next harness run to trip on. Brings verify-realtime to
+        6/6 (was 5). ~12 LOC including the count query.
+
+        MOD apps/api/scripts/verify-connect-gate.ts — added 1 new case
+        asserting bun.lock passes (the &lt;correction pr="9"&gt; fix
+        above). 40/40 (was 39).
+
+        MOD migration-plan.md — this `&lt;pr id="10"&gt;` entry.
+      </code>
+    </step-5.2>
+
+    <deviations>
+      - **Env-tunable interval constants**. Not strictly required by
+        the kickoff scope; added because the scheduler chain can't be
+        proven end-to-end at the 60s + 2h defaults without burning
+        wall-clock. The env-tunable + fast 2s+2s tick-smoke is the
+        minimum proof that the setTimeout chain actually loops. Side
+        benefit: operators can dial the interval without redeploying.
+      - **No new component / no new migration**. Matches PR9's
+        "no UI component" deviation; the reconciler is a runtime
+        addition only, no schema change (build_jobs.commit_sha was
+        already non-null per 0001).
+      - **No-`semver` dep continued**. Same posture as PR9 — the
+        reconciler only compares SHA strings (textual equality), no
+        version logic.
+    </deviations>
+
+    <verification gate="PR10" result="PASS">
+      verify-reconciler: 20/20 PASS (new harness).
+      verify-connect-gate: 40/40 PASS (was 39, +1 bun.lock case).
+      verify-realtime: 6/6 PASS (was 5, +1 teardown assert; first
+        run on this branch hit the PR8-documented publication-refresh
+        window — 7s event timeout, see PR8 &lt;known-risks&gt; — solo
+        re-run after a ~10s settle passed cleanly including the new
+        teardown assert).
+      No-regression: verify-iframe 38/38, verify-push-webhook 12/12,
+        verify-build-worker 14/14 (full pass this session — no
+        leftover `tsx watch` dev workers; the PR9-documented
+        precondition was cleared via `pkill -f "tsx watch src/index.ts"`
+        before re-running).
+
+      Builds GREEN:
+      - `pnpm --filter @usemount/shared build` (tsc -b) clean.
+      - `pnpm --filter @usemount/api build` (tsc -b) clean.
+      - `cd apps/web &amp;&amp; pnpm exec tsc --noEmit` clean.
+      - `cd apps/web &amp;&amp; pnpm exec next build` — Compiled
+        successfully in 3.1s, 10 routes intact incl. ƒ /connect,
+        ƒ /connect/callback, ƒ /preview/[manifestId],
+        ƒ /[workspace]/[repo]/[branch], middleware proxy.
+
+      Port-boot smoke: PORT=4013, observed
+      `[worker:local-...] startup`, `[reconciler] startup (first tick
+      in ~60s, then every 7200s)`, `usemount.dev API running on port
+      4013`, SIGTERM → `[main] SIGTERM — shutting down`,
+      `[worker:...] explicit stop — finishing current job, then
+      exiting`, clean shutdown. (Caveat: when backgrounded under tsx
+      watch via `pnpm dev`, the tsx wrapper sometimes detaches the
+      child node process so the final `[worker] loop exited` /
+      `[main] shutdown complete` lines don't always flush before
+      tsx tears down stdout. On Railway, SIGTERM goes straight to
+      the node process — no tsx wrapper — and the full drain
+      sequence is observable. Not a regression.)
+
+      Tick smoke: RECONCILER_FIRST_DELAY_MS=2000 +
+      RECONCILER_INTERVAL_MS=2000 + DISABLE_BUILD_WORKER=1 +
+      PORT=4015, observed
+      `[reconciler] startup (first tick in ~2s, then every 2s)`,
+      `usemount.dev API running on port 4015`, three successive
+      `[reconciler] tick: 0 checked, 0 enqueued, 0 errors` lines,
+      SIGTERM → `[main] SIGTERM — shutting down`, clean shutdown
+      (exit 143). Proves the setTimeout chain actually fires
+      repeatedly — the harness verifies runReconciler() correctness
+      directly but bypasses the scheduler.
+
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked +
+      design-philosophy/Design Purgatory/) untouched across the
+      branch cut + commit + this docs commit.
+
+      NOT exercised (deferred — owner-runnable):
+      - Live GitHub HEAD fetch via the default fetchHead against a
+        real installation. The GitHub App still has 0 installations
+        (per PR9 known-risk); the moment the owner installs the App
+        and connects a real repo, the next reconciler tick (within
+        2h) will hit `octokit.repos.getBranch(...)` on a real branch.
+        Until then, the live-DB harness with the stubbed fetchHead
+        is the strongest proof.
+    </verification>
+
+    <known-risks>
+      Carry-forward (PR3/PR4/PR5/PR6/PR7/PR8/PR9): R1 two-app footgun,
+      R7 apps/api never deploy-verified, R9 cors('*') + GitHub App
+      URLs unset + D1 same-origin iframe + Realtime first-deploy
+      publication-settle window. PR9 monorepo-refusal + no-refusal-
+      logging + no-near-miss-hints carry forward (Step 5 polish).
+      All unchanged from PR9.
+
+      PR10-introduced:
+      - **Multi-replica reconciler stampede mitigated, not eliminated**.
+        At post-R7/R9 multi-replica scale, every replica fires the
+        same HEAD-fetch sweep every 2h. 0002's partial UNIQUE catches
+        the duplicate INSERTs (covered + tested in case B), but the
+        wasted GitHub API calls aren't free. Mitigation: add jitter
+        to FIRST_TICK_DELAY_MS per replica via a small random delay
+        derived from `RAILWAY_REPLICA_ID`. Step 5.x polish; v1 is
+        fine.
+      - **Local-dev reconciler noise**. After the +60s first tick,
+        every running `pnpm dev` will fire ticks against any local
+        sentinel `active=true` repo_connections (PR8-realtime + PR10-
+        reconciler sentinels are cleaned by teardown; the user's
+        real /connect rows would also fire — but real rows mean a
+        real install token, which works fine). For dev-without-DB
+        scenarios, set `DISABLE_RECONCILER=1` alongside
+        `DISABLE_BUILD_WORKER=1`. Worth a one-liner in
+        `apps/api/.env.example` if/when that file is touched next.
+      - **Persistently-404'd instances retried every 2h forever**.
+        If a branch is deleted (or the App loses access on that one
+        branch), the reconciler logs `no head for ${repo}#${branch}`
+        and skips. It doesn't deactivate the instance row or pause
+        the per-instance check. Net: every 2h that 404 fires again.
+        Polish (Step 5.x): on N consecutive 404s, deactivate the
+        instance row or flip the pinned flag off. Not blocking;
+        observable in logs.
+      - **No `RECONCILER_INTERVAL_MS` / `RECONCILER_FIRST_DELAY_MS`
+        in apps/api/.env.example**. Defaults are production-correct
+        (60s + 2h) so no production deploy is at risk; only the
+        local-dev experience misses the tunables. Bundle with the
+        DISABLE_RECONCILER doc one-liner above when that file
+        is next touched.
+
+      PR9-known-risks resolved this session:
+      - **bun.lock false-negative refusal**: closed by
+        &lt;correction pr="9"&gt; in this PR.
+      - **2 audit NITs (verify-realtime teardown assert,
+        /preview error-CSP x-frame-options)**: closed by the
+        defense-in-depth cleanup in &lt;step-5.2&gt; above.
+
+      Pre-existing, not yours to fix:
+      - Same set as PR9.
+    </known-risks>
+
+    <next>
+      Step 5 sub-PRs still to ship (architecture-brief §3 + §11):
+      - (b) **PR11 — Provider auto-detect from app/layout.tsx**.
+        Largest Step 5 sub-PR; worker scans `app/layout.tsx` for
+        known providers (next-themes, @tanstack/react-query,
+        next-intl, @emotion/react, etc.), emits a
+        `providers.auto.tsx` in the bundle, iframe runtime wraps
+        every component. Recommended PR11 scope per the chain.
+      - (c) `canvas.providers.tsx` fallback — pairs with (b);
+        single repo-root file the worker copies into the bundle
+        when the customer's provider is bespoke.
+      - (d) `Component.canvas.tsx` per-component override —
+        exported `controls` merge into / override the auto-
+        generated panel.
+      - (f) RSC sidebar disposition — promote PR7's `maybe-rsc` /
+        `unsupported` inline tile to a sidebar greyed-out leaf
+        with explicit "Server component — not supported" note
+        (architecture-brief §3 disposition 1).
+
+      Step 5 polish (deferrable past PR11):
+      - Multi-replica reconciler jitter (PR10-introduced known-risk).
+      - 404-persistent-branch instance deactivation (PR10-
+        introduced known-risk).
+      - Reconciler env tunables in apps/api/.env.example
+        documentation (PR10-introduced known-risk).
+      - Connect-gate refusal logging (PR9-known-risk).
+      - Near-miss version hints (PR9-known-risk).
+      - Monorepo workspace-aware scan (PR9-known-risk).
+      - node_modules cache LRU eviction (PR6-known-risk).
+      - Theme inheritance via init payload (PR7-known-risk).
+      - Per-component diff-skip via esbuild metafile (PR6-known-
+        risk).
+      - Bundle export discovery heuristic / `entryExportName` field
+        (PR7-known-risk).
+
+      R7/R9 still deferred (Railway + GitHub App URLs + CORS lock
+      + custom-domain DNS + cross-origin preview subdomain +
+      Realtime first-deploy settle window). With Step 5.2 closed
+      the system has cheap insurance against the "missed webhook =
+      permanent staleness" failure mode — one more "looks like our
+      bug but isn't" surface eliminated.
+
+      Before R7/R9: no PAT was taken this session — no shred /
+      deletion required.
+    </next>
+  </pr>
 </migration-log>
