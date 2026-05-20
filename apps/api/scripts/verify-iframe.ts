@@ -5,9 +5,14 @@
 //   2. shared synthesizeDefaultProps over the full D1 row-kind matrix
 //   3. Storage upload + signed-URL sign + HEAD round-trip on the live bucket
 //      (verifies CORS + 15-min TTL works against the real Supabase bucket)
-//   4. Storage list-prefix shape (the signGlobalsCss helper relies on this)
+//   4. Storage list-prefix shape (the signGlobalsCss + signProvidersBundle
+//      helpers rely on this)
 //   5. DB sentinel manifest insert + RLS-bypassed select via service-role +
 //      cascade teardown
+//   6. (PR11) providers bundle round-trip — upload `providers.<hash>.js`,
+//      assert the list-prefix regex used by signProvidersBundle matches +
+//      HEAD-signs cleanly. The pure renderIframeHtml `providersUrl` branch
+//      is covered structurally by `next build` in PR11 verification.
 //
 // The route handler itself is exercised in the next build + a manual curl
 // against `next dev` — the route depends on Next 16's request-scoped cookies()
@@ -50,8 +55,10 @@ interface SetupResult {
   jsKey: string
   cssKey: string
   globalsKey: string
+  providersKey: string
   sourceHash: string
   globalsHash: string
+  providersHash: string
 }
 
 interface Case {
@@ -120,6 +127,8 @@ async function setup(): Promise<SetupResult> {
   const jsBody = `// PR7 sentinel\nexport default function Sentinel(){return null}\n`
   const cssBody = `/* PR7 sentinel */\n.sentinel { color: rebeccapurple; }\n`
   const globalsBody = `/* PR7 globals */\nhtml { font-family: system-ui; }\n`
+  // PR11 providers sentinel — minimal ESM with the locked default-export shape.
+  const providersBody = `// PR11 providers sentinel\nexport default function Providers(p){return p.children}\n`
   const sourceHash = createHash("sha256")
     .update(jsBody)
     .digest("hex")
@@ -128,9 +137,14 @@ async function setup(): Promise<SetupResult> {
     .update(globalsBody)
     .digest("hex")
     .slice(0, 16)
+  const providersHash = createHash("sha256")
+    .update(providersBody)
+    .digest("hex")
+    .slice(0, 16)
   const jsKey = `${inst.id}/${TEST_SLUG}.${sourceHash}.js`
   const cssKey = `${inst.id}/${TEST_SLUG}.${sourceHash}.css`
   const globalsKey = `${inst.id}/globals.${globalsHash}.css`
+  const providersKey = `${inst.id}/providers.${providersHash}.js`
   const jsUpload = await sb.storage
     .from(BUCKET)
     .upload(jsKey, new Blob([jsBody], { type: "application/javascript" }), {
@@ -153,6 +167,18 @@ async function setup(): Promise<SetupResult> {
     })
   if (globalsUpload.error)
     throw new Error(`upload globals: ${globalsUpload.error.message}`)
+  const providersUpload = await sb.storage
+    .from(BUCKET)
+    .upload(
+      providersKey,
+      new Blob([providersBody], { type: "application/javascript" }),
+      {
+        upsert: true,
+        contentType: "application/javascript",
+      },
+    )
+  if (providersUpload.error)
+    throw new Error(`upload providers: ${providersUpload.error.message}`)
 
   const controls: BuildManifestControls = {
     variants: { prop: "variant", options: ["primary", "secondary"] },
@@ -197,8 +223,10 @@ async function setup(): Promise<SetupResult> {
     jsKey,
     cssKey,
     globalsKey,
+    providersKey,
     sourceHash,
     globalsHash,
+    providersHash,
   }
 }
 
@@ -207,7 +235,9 @@ async function teardown(s: SetupResult | null): Promise<void> {
   const sb = supabaseAdmin()
   // Storage first (orphaned objects don't get cleaned up by cascading FKs).
   try {
-    await sb.storage.from(BUCKET).remove([s.jsKey, s.cssKey, s.globalsKey])
+    await sb.storage
+      .from(BUCKET)
+      .remove([s.jsKey, s.cssKey, s.globalsKey, s.providersKey])
   } catch (e) {
     console.warn(`[teardown] storage remove: ${(e as Error).message}`)
   }
@@ -476,6 +506,36 @@ async function runStorageCases(s: SetupResult): Promise<void> {
     !!missingErr,
     "expected error for missing object",
   )
+
+  // 6) PR11 — providers bundle list-and-sign round-trip. signProvidersBundle
+  // uses the same list-prefix + regex shape as signGlobalsCss; this exercises
+  // the storage contract directly.
+  const providersFile = (files ?? []).find((f) =>
+    /^providers\.[a-f0-9]+\.js$/i.test(f.name),
+  )
+  assert(
+    "list prefix surfaces providers.<hash>.js (signProvidersBundle regex matches)",
+    !!providersFile,
+    `files: ${(files ?? []).map((f) => f.name).join(", ")}`,
+  )
+  if (providersFile) {
+    const { data: pSign, error: pErr } = await sb.storage
+      .from(BUCKET)
+      .createSignedUrl(`${s.instanceId}/${providersFile.name}`, SIGNED_URL_TTL_SECONDS)
+    assert(
+      "createSignedUrl(providers) returns URL",
+      !!pSign?.signedUrl && !pErr,
+      pErr?.message,
+    )
+    if (pSign?.signedUrl) {
+      const resp = await fetch(pSign.signedUrl, { method: "HEAD" })
+      assert(
+        "HEAD signed providers URL → 200",
+        resp.status === 200,
+        `${resp.status} ${resp.statusText}`,
+      )
+    }
+  }
 }
 
 async function runDbCases(s: SetupResult): Promise<void> {

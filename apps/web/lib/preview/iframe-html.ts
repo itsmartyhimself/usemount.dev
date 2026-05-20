@@ -13,6 +13,14 @@ export interface RenderIframeOpts {
   perComponentCssUrl: string | null
   /** Signed Storage URL for the instance globals.css, if uploaded. */
   globalsCssUrl: string | null
+  /**
+   * Step 5.3 + 5.4 — signed Storage URL for the instance providers bundle.
+   * Null when the worker detected no known providers AND no canvas.providers.tsx
+   * was supplied; the bootstrap then renders the customer component bare
+   * (PR7 behavior, no regression). When present, the bootstrap imports the
+   * default export `Providers({ children })` and wraps every render with it.
+   */
+  providersUrl: string | null
   /** Wire version — kept in sync with packages/shared/src/iframe-protocol.ts. */
   protocolVersion: number
 }
@@ -82,20 +90,30 @@ export function renderIframeHtml(opts: RenderIframeOpts): string {
   })
 
   // Bootstrap module — every identifier is local; the only thing crossing
-  // into customer space is the dynamic import + the component invocation.
-  // Heuristic export discovery handles `export default` AND the first
-  // PascalCase function export (PR6's introspect picks the same first
-  // PascalCase, so the names line up on the dogfood + REV-Plugin matrix).
+  // into customer space is the dynamic imports (bundle + providers) and the
+  // component invocation. Heuristic export discovery for the component
+  // handles `export default` AND the first PascalCase function export (PR6's
+  // introspect picks the same first PascalCase, so the names line up on the
+  // dogfood + REV-Plugin matrix).
+  //
+  // Step 5.3 + 5.4 — when PROVIDERS_URL is non-null, the bootstrap loads it
+  // in parallel with the component bundle and wraps every render in the
+  // provider tree. The providers contract is strict: the bundle MUST default-
+  // export a function `Providers({ children })`. The auto-emit in apps/api
+  // src/build/providers.ts produces this shape; customer canvas.providers.tsx
+  // override files are documented in apps/web/CONVENTIONS.md to match.
   const bootstrap = `
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 
 const PROTOCOL_VERSION = ${opts.protocolVersion}
 const BUNDLE_URL = ${jsonForScript(opts.bundleUrl)}
+const PROVIDERS_URL = ${jsonForScript(opts.providersUrl)}
 
 const rootEl = document.getElementById("root")
 const root = createRoot(rootEl)
 let Component = null
+let Providers = null
 let mounted = false
 
 function postToHost(msg) {
@@ -117,6 +135,11 @@ function pickComponent(mod) {
   return null
 }
 
+function pickProviders(mod) {
+  if (mod && typeof mod.default === "function") return mod.default
+  return null
+}
+
 function reportBbox() {
   const r = rootEl.getBoundingClientRect()
   return { width: r.width, height: r.height }
@@ -125,7 +148,9 @@ function reportBbox() {
 function safeRender(props) {
   if (!Component) return
   try {
-    root.render(React.createElement(Component, props))
+    const tree = React.createElement(Component, props)
+    const wrapped = Providers ? React.createElement(Providers, null, tree) : tree
+    root.render(wrapped)
   } catch (e) {
     postToHost({ v: PROTOCOL_VERSION, kind: "error", message: String((e && e.message) || e) })
   }
@@ -163,10 +188,18 @@ window.addEventListener("unhandledrejection", (event) => {
 
 ;(async () => {
   try {
-    const mod = await import(BUNDLE_URL)
+    const bundleP = import(BUNDLE_URL)
+    const providersP = PROVIDERS_URL ? import(PROVIDERS_URL) : Promise.resolve(null)
+    const [mod, providersMod] = await Promise.all([bundleP, providersP])
     Component = pickComponent(mod)
     if (!Component) {
       throw new Error("bundle did not export a PascalCase function or default")
+    }
+    if (providersMod) {
+      Providers = pickProviders(providersMod)
+      if (!Providers) {
+        throw new Error("providers bundle did not export a default function — see apps/web/CONVENTIONS.md for canvas.providers.tsx shape")
+      }
     }
     postToHost({ v: PROTOCOL_VERSION, kind: "ready", bbox: reportBbox() })
   } catch (e) {

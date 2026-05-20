@@ -50,6 +50,39 @@ export async function bundleComponent(opts: {
   return { jsBytes, cssBytes }
 }
 
+/**
+ * Step-5.3 providers bundle. The auto-emit (or customer-provided
+ * canvas.providers.tsx) compiles through the SAME externals as component
+ * bundles — React + jsx-runtime are supplied by the iframe runtime — but the
+ * providers pipeline has NO `.css` loader. A canvas.providers.tsx that
+ * imports CSS will fail esbuild, the worker catches the error and falls back
+ * to bare-render (PR7 behavior). Customer styles for the provider tree
+ * belong in globals.css. Documented in apps/web/CONVENTIONS.md.
+ */
+export async function bundleProviders(opts: {
+  entry: string
+  workDir: string
+  tsconfigPath: string
+}): Promise<Uint8Array> {
+  const out = await build({
+    entryPoints: [opts.entry],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "browser",
+    jsx: "automatic",
+    tsconfig: opts.tsconfigPath,
+    external: ["react", "react-dom", "react/jsx-runtime"],
+    minify: true,
+    absWorkingDir: opts.workDir,
+    logLevel: "silent",
+    // Deliberately no `.css` loader — providers CSS is dropped (v1 limitation).
+  })
+  const jsFile = out.outputFiles.find((f) => !f.path.endsWith(".css"))
+  if (!jsFile) throw new Error("esbuild produced no JS output for providers")
+  return jsFile.contents
+}
+
 export async function bundleGlobalsCss(opts: {
   globalsCssPath: string
   workDir: string

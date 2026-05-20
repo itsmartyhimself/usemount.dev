@@ -3229,4 +3229,388 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       deletion required.
     </next>
   </pr>
+
+  <pr id="11" branch="feat/migration-step-5.3" base="staging" covers="Step 5.3 + Step 5.4"
+      verified="builds+harness+no-regression+boot-smoke+full-stack-smoke" date="2026-05-20">
+    <secrets-policy>No Management API or live DB writes required beyond the
+      existing service-role harness pattern. No PAT requested or staged this
+      session — PR11 is a worker-pipeline addition (resolveProvidersSource +
+      bundleProviders + worker wiring), a web-side signed-URL helper + iframe-
+      bootstrap wrap, and a pure FS harness for the resolver. The service-role
+      admin client (already in env) is sufficient for the verify-iframe
+      providers round-trip sentinels.</secrets-policy>
+
+    <decisions>
+      <decision id="scope" name="PR11 bundling: 5.3+5.4 default vs 5.3+5.4+5.5 stretch"
+                answer="(A) 5.3 + 5.4 only — arch-brief §11.4 aligned, 5.5 deferred to PR12">
+        The PR10 hand-back doc framed PR11 with 5.5 as a possible stretch if
+        audit was clean (it is) and budget held. Advisor pass before code
+        surfaced the primary-source evidence the hand-back doc had
+        underweighted: architecture-brief §11.4 says "v1 ships a single
+        optional wrapper file (`canvas.providers.tsx` at repo root); **v2
+        supports per-component wrappers**." Component.canvas.tsx is explicitly
+        tagged v2. The owner picked 5.3+5.4-only at the kickoff ask-user-
+        question with the §11.4 quote surfaced. Anti-bloat clause from the
+        OWNER MANDATE preserved.
+      </decision>
+      <decision id="discriminator" name="provider detection: JSX-tag-name vs import-source"
+                answer="import-source (with original export name)">
+        `&lt;ThemeProvider&gt;` from `next-themes` and `&lt;ThemeProvider&gt;`
+        from `@emotion/react` are different providers — same JSX tag, very
+        different module. Detection builds a per-file `localName → {sourceModule,
+        originalName, isDefault}` map, walks JSX ancestors of `{children}`, and
+        matches against KNOWN_PROVIDERS by (sourceModule, originalName). Aliased
+        imports (`import { ThemeProvider as TP } from "next-themes"`) preserve
+        the original export name so the customer's aliased usage isn't a false
+        negative. Verified by case 10 in verify-providers.
+      </decision>
+      <decision id="non-literal-attrs" name="how to handle non-literal attrs"
+                answer="strip + use sensible defaults from KNOWN_PROVIDERS">
+        Customer writes `&lt;QueryClientProvider client={queryClient}&gt;` where
+        `queryClient` is a free variable defined elsewhere in layout.tsx. The
+        auto-emit can't reference it — providers.auto.tsx is a standalone file
+        in workDir, no closure access. Decision (a): strip non-literal attrs,
+        emit with curated defaults from the provider registry (e.g.,
+        `&lt;QueryClientProvider client={queryClient}&gt;` paired with a
+        `const queryClient = new QueryClient()` preamble; ThemeProvider always
+        emitted with `attribute="class"`). Matches arch-brief §3 disposition #2
+        wording ("if it sees ThemeProvider wrapping {children}" = shape only).
+        Customer who needs exact attrs uses canvas.providers.tsx. Hint surfaces
+        in build log naming the stripped attrs.
+      </decision>
+      <decision id="providers-list" name="known-providers seed list for v1"
+                answer="common Next.js stack: next-themes, @tanstack/react-query, next-intl, framer-motion">
+        v1 = 4 providers covering ~80% of real Next.js stacks. Each addition is
+        ~10 LOC of KNOWN_PROVIDERS row + 1 harness case — cheap to extend in
+        PR12+ based on real customer signal. Owner picked the "common Next.js
+        stack" option at kickoff. MUI/Chakra/Mantine/@emotion customers fall
+        through to "no providers" detection and drop a canvas.providers.tsx.
+      </decision>
+      <decision id="storage-key" name="providers bundle key shape + signing"
+                answer="slug='providers'; signProvidersBundle mirrors signGlobalsCss list-prefix pattern">
+        `uploadJs` already produces `${instanceId}/${slug}.${sourceHash}.js`.
+        Set `slug = "providers"` (single-slug, matches `slug = "globals"`
+        precedent). Origin (auto vs canvas-override) lives in worker logs and
+        this migration-log, NOT in the storage path — the iframe runtime
+        treats both identically. signProvidersBundle lists the instance prefix,
+        regex-matches `^providers\.[a-f0-9]+\.js$`, picks freshest by
+        `updated_at DESC` — same idiom as signGlobalsCss. No new column on
+        instances or component_manifests; no schema change.
+      </decision>
+      <decision id="bootstrap-contract" name="Providers default-export contract"
+                answer="`export default function Providers({ children }): ReactNode`">
+        Strict contract. Auto-emit produces it; customer canvas.providers.tsx
+        override files MUST match it (documented in apps/web/CONVENTIONS.md).
+        Iframe bootstrap validates `pickProviders(mod)` returns a function and
+        throws a customer-readable error referencing CONVENTIONS.md if the
+        shape is wrong. iframe-protocol stays at v1; providersUrl rides on
+        `RenderIframeOpts`, not on postMessage, so no version bump.
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Parallel Explore agent swept PR1–PR10 `&lt;known-risks&gt;` end-to-end +
+      re-verified PR10's load-bearing primitives (Octokit 404-vs-throw shape,
+      Postgres 23505 swallow, shutdown cascade order, iframe CSP for dynamic
+      imports). PR10's prioritised register rolls forward unchanged this
+      session — PR11 closed nothing from the open register, and the four new
+      items below are net additions.
+
+      PR10 surface — confirmed clean (re-verification):
+      - `reconciler.ts:47-56` defaultFetchHead still discriminates 404 vs
+        throw via `(e as {status?: number}).status === 404`; Octokit REST v22
+        (per apps/api/package.json line 23) preserves the `.status` property.
+      - `reconciler.ts:129-145` 23505 swallow still via `(insErr as
+        {code?: string}).code === "23505"`; supabase-js v2.105.4 preserves
+        the `.code` property on PostgrestError.
+      - `index.ts:62-85` shutdown cascade still ordered:
+        `reconciler.stop() → worker.stop() → await worker.done →
+        await reconciler.done → httpServer.close()`. Railway-correct.
+      - `iframe-html.ts:27-38` CSP `script-src 'self' 'nonce-…'
+        https://&lt;storageHost&gt;` allows dynamic `import(providersUrl)`
+        from the storage host (no policy change needed for PR11).
+
+      Cross-PR sweep — none of PR10's open MEDIUMs blocking PR11:
+      - Multi-replica reconciler stampede (PR10) — orthogonal to provider
+        detection.
+      - 404-persistent instance retry (PR10) — orthogonal.
+      - .env.example RECONCILER_* docs (PR10) — orthogonal.
+      - Refusal logging / near-miss hints / monorepo refusal (PR9) — orthogonal.
+      - node_modules LRU eviction (PR6) — orthogonal.
+      - R7/R9 LOW items (CORS, App URLs, custom-domain DNS) — orthogonal.
+
+      PR11 worker-pipeline seam confirmed clean — between line 220
+      (`parseMountConfig`) and line 244 (`const project = new Project(...)`)
+      there is no shared state or side effect blocking the providers
+      resolution step; only the `isStolen()` early-return check sits between,
+      which the providers block defends against on its own line.
+
+      Prioritised risk register (rolls forward to PR12 handover):
+      - **BLOCKER**: none.
+      - **HIGH**: none open.
+      - **MEDIUM (Step 5/5.x polish)**: PR10's open MEDIUMs unchanged
+        (multi-replica jitter, 404-persistent retry, .env.example docs,
+        refusal logging, near-miss hints, monorepo refusal,
+        node_modules LRU). PR11 added four — see &lt;known-risks&gt; below.
+      - **LOW (R7/R9 gate)**: unchanged.
+
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked + design-
+      philosophy/Design Purgatory/) untouched throughout audit + branch +
+      commit.
+    </audit-findings>
+
+    <step-5.3-5.4 title="Provider auto-detect + canvas.providers.tsx fallback">
+      <code>
+        NEW apps/api/src/build/providers.ts — `resolveProvidersSource(workDir)`
+        pure resolver returning `{source, origin: 'canvas-override' | 'auto' |
+        'none', detected, hints}`. Order:
+        (a) Check `canvas.providers.tsx` (then `canvas.providers.ts`) at
+            workDir root — if exists, source = file contents verbatim,
+            origin='canvas-override'. (Step 5.4 fallback path.)
+        (b) Else parse `app/layout.tsx` (then `src/app/layout.tsx`) via
+            ts-morph with `skipAddingFilesFromTsConfig: true` (matches
+            mount-config.ts/worker.ts AST-safety posture; never `import()` or
+            evaluate customer code). Build `localName →
+            {sourceModule, originalName, isDefault}` map from ImportDeclarations;
+            find `{children}` JsxExpression; walk ancestors collecting
+            JsxElements until ReturnStatement / FunctionDeclaration / ArrowFunction;
+            reverse to OUTER→INNER order; per JsxElement, look up in importMap,
+            match against KNOWN_PROVIDERS by (sourceModule, originalName,
+            isDefault). Stripped-attr hint emitted per provider. Emit
+            providers.auto.tsx source string with deduped imports (sorted),
+            optional preambles, and nested JSX (outer→inner) using curated
+            defaults. (Step 5.3 auto-detect path.)
+        (c) Else `{source: null, origin: 'none'}` — bare-render (PR7 behavior).
+
+        v1 KNOWN_PROVIDERS: next-themes ThemeProvider (`attribute="class"`),
+        @tanstack/react-query QueryClientProvider (with QueryClient preamble),
+        next-intl NextIntlClientProvider (`locale="en" messages={{}}`), framer-
+        motion MotionConfig. Adding a provider = 1 row + 1 harness case.
+
+        NEW apps/api/src/build/bundle.ts → `bundleProviders` — esbuild call
+        mirroring `bundleComponent` (same React/jsx-runtime externals, same
+        absWorkingDir, same tsconfig inheritance). Deliberately NO `.css`
+        loader — canvas.providers.tsx that imports CSS fails the bundle and
+        the worker catches the error, continuing with bare-render. Documented
+        in apps/web/CONVENTIONS.md.
+
+        MOD apps/api/src/build/worker.ts — between line 238
+        (`if (isStolen()) return`) and line 240 (`const project = new
+        Project(...)`), call resolveProvidersSource. If source !== null,
+        write to `${workDir}/.usemount-providers.auto.tsx`, bundleProviders,
+        uploadJs with slug='providers' and a sha256-truncated hash. Provider
+        bundling failure is non-fatal: catch, log, fall back to bare-render.
+        Hints from the resolver flushed to log alongside the success line.
+        Cleanup falls through `cloneResult.cleanup()` on workDir destruction.
+
+        MOD apps/web/lib/storage/signed-url.ts → `signProvidersBundle`
+        — same list-prefix + regex + sort-by-updated_at idiom as
+        signGlobalsCss. Returns null when no providers bundle present (bare-
+        render path). Header comment updated to record the new key shape.
+
+        MOD apps/web/lib/preview/iframe-html.ts → `RenderIframeOpts.providersUrl:
+        string | null` + bootstrap wrap. Bootstrap now loads bundle + (optional)
+        providers in parallel via `Promise.all`, picks `Providers` via
+        `pickProviders(mod)` (default-export-only — strict contract), throws
+        a CONVENTIONS.md-referencing error if shape is wrong. `safeRender`
+        wraps `React.createElement(Component, props)` inside
+        `React.createElement(Providers, null, ...)` when Providers is non-null;
+        otherwise renders bare (PR7 behavior, no regression). IFRAME_PROTOCOL_VERSION
+        stays at 1 — providersUrl is server→iframe via HTML, not via postMessage.
+
+        MOD apps/web/app/preview/[manifestId]/route.ts — calls
+        `signProvidersBundle(row.instance_id)` alongside `signGlobalsCss(...)`,
+        passes the result through `renderIframeHtml`. Failure mode: same
+        storage-signing-failed 500 path as today.
+
+        MOD apps/web/CONVENTIONS.md — NEW "Canvas providers (customer-facing)"
+        section documenting:
+        - Auto-detect from app/layout.tsx + v1 known-providers list.
+        - canvas.providers.tsx override file location + strict default-export
+          contract (`Providers({ children }): ReactNode`).
+        - CSS imports fail the bundle → bare-render fallback (NOT silently
+          dropped — honesty matters for a customer-facing convention).
+        - React externals (iframe runtime supplies them).
+
+        NEW apps/api/scripts/verify-providers.ts — 12 scenarios, 34 assertions,
+        sentinel range = tmp dirs (no DB sentinels needed; the resolver is
+        pure file-system). Cases:
+        - 1: canvas.providers.tsx override returned verbatim (3 asserts)
+        - 2: canvas.providers.ts (.ts variant) also honored (2 asserts)
+        - 3: auto-detect happy path (ThemeProvider + QueryClientProvider)
+            with curated default attrs + preamble + stripped-attr hint
+            (7 asserts)
+        - 4: layout with no known providers → origin='none' (3 asserts)
+        - 5: no layout at all → origin='none' with hint (2 asserts)
+        - 6: unknown JSX wrapper (custom module) → no false positive (2 asserts)
+        - 7: nesting order preserved (Query outer / Theme inner) (2 asserts)
+        - 8: override beats auto-detect (3 asserts)
+        - 9: src/app/layout.tsx variant picked up (3 asserts)
+        - 10: aliased import (`import { ThemeProvider as TP }`) detected by
+              original export name; emit uses canonical name (2 asserts)
+        - 11: next-intl detected with curated locale/messages defaults
+              (2 asserts)
+        - 12: full 4-provider stack detected + emit imports all 4 (3 asserts)
+
+        MOD apps/api/scripts/verify-iframe.ts — +3 cases for providers bundle
+        list+sign+HEAD round-trip (mirrors the globals.css storage round-trip
+        pattern in the same harness). Brings verify-iframe to 41/41 (was 38).
+        SetupResult gains `providersKey` + `providersHash`; teardown extended
+        to remove the providers object.
+
+        MOD apps/api/package.json — added `verify:providers` script.
+
+        MOD migration-plan.md — this `&lt;pr id="11"&gt;` entry.
+      </code>
+    </step-5.3-5.4>
+
+    <deviations>
+      - **No iframe-protocol version bump**. providersUrl rides on
+        `RenderIframeOpts` (server→client HTML payload, not postMessage); the
+        wire protocol between iframe and host is unchanged.
+      - **No schema migration**. Providers bundle URL discovered via Storage
+        list-prefix listing, same as globals.css (PR7 precedent). No new
+        column on instances or component_manifests.
+      - **No new component / no UI work this PR**. PR11 is a worker-pipeline +
+        iframe-bootstrap change; the dashboard / canvas surfaces are
+        untouched. (Step 5.6 sidebar disposition is the next UI-touching PR.)
+      - **5.5 deferred to PR12 (or later)**. Arch-brief §11.4 explicitly tags
+        Component.canvas.tsx as v2; aligned with that primary source over
+        the PR10 hand-back doc's "stretch" framing.
+    </deviations>
+
+    <verification gate="PR11" result="PASS">
+      verify-providers: 34/34 PASS (new harness, 12 scenarios).
+      verify-iframe: 41/41 PASS (was 38; +3 providers bundle round-trip cases).
+      No-regression:
+        verify-reconciler 20/20,
+        verify-connect-gate 40/40,
+        verify-realtime 6/6 (first run hit the PR8-documented publication-
+          refresh window — 7s event timeout, see PR8 + PR10 &lt;known-risks&gt;
+          — solo re-run after a ~12s settle passed cleanly),
+        verify-push-webhook 12/12,
+        verify-build-worker 14/14 (PR9-documented `pkill -f "tsx watch
+          src/index.ts"` precondition cleared before re-run).
+      Total: 167/167 across 7 harnesses.
+
+      Builds GREEN:
+      - `pnpm --filter @usemount/shared build` (tsc -b) clean.
+      - `pnpm --filter @usemount/api build` (tsc -b) clean.
+      - `pnpm exec tsc --noEmit` (apps/web) clean.
+      - `pnpm exec next build` (apps/web) — Compiled successfully in 3.1s,
+        10 routes intact incl. ƒ /preview/[manifestId], ƒ /connect,
+        ƒ /connect/callback, ƒ /[workspace]/[repo]/[branch], middleware.
+
+      Port-boot smoke (HTTP-only): PORT=4020 + DISABLE_BUILD_WORKER=1 +
+      DISABLE_RECONCILER=1, observed `usemount.dev API running on port 4020`,
+      clean SIGTERM.
+
+      Full-stack smoke (worker + reconciler): PORT=4021 +
+      RECONCILER_FIRST_DELAY_MS=3000 + RECONCILER_INTERVAL_MS=10000, observed
+      `[worker:local-...] startup`, `[reconciler] startup (first tick in ~3s,
+      then every 10s)`, `usemount.dev API running on port 4021`, then
+      `[reconciler] tick: 0 checked, 0 enqueued, 0 errors`. Worker + reconciler
+      + http all mounted; no regressions from PR10's tick-smoke shape.
+
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked + design-
+      philosophy/Design Purgatory/) untouched across the branch cut + commits.
+
+      NOT exercised (deferred — owner-runnable):
+      - End-to-end provider chain on a REAL customer build:
+        `resolveProvidersSource → write file → bundleProviders → uploadJs →
+        signProvidersBundle → iframe import → wrap`. The harness covers the
+        resolver (pure) and the storage round-trip (sentinel bundle); the
+        esbuild stage requires a real customer node_modules with the v1
+        known-providers actually installed. Same gap shape as PR10's live
+        GitHub HEAD fetch — only proven when the owner installs the GitHub
+        App and connects a repo with `next-themes` (or any v1 known provider).
+        Until then, the harness + builds + boot smokes are the strongest
+        proof.
+    </verification>
+
+    <known-risks>
+      Carry-forward (PR3/PR4/PR5/PR6/PR7/PR8/PR9/PR10): R1 two-app footgun,
+      R7 apps/api never deploy-verified, R9 cors('*') + GitHub App URLs unset
+      + D1 same-origin iframe + Realtime first-deploy publication-settle
+      window; PR9 monorepo-refusal + no-refusal-logging + no-near-miss-hints;
+      PR6 node_modules LRU; PR10 multi-replica reconciler stampede +
+      404-persistent instance retry + RECONCILER_* env docs missing. All
+      unchanged from PR10 — PR11 closed nothing from the open register.
+
+      PR11-introduced:
+      - **Stale providers bundle on removal**. If a customer once had
+        canvas.providers.tsx (or layout.tsx with known providers) and removes
+        them, the prior providers.&lt;hash&gt;.js stays in Storage and
+        signProvidersBundle still returns it. Same staleness shape as
+        globals.css today (PR7 precedent). Mitigation: rebuild-on-empty
+        cleanup of the providers/* prefix when the resolver returns
+        origin='none'. Step 5.x polish — consistent with the globals.css
+        v1-accept posture.
+      - **CSS-in-canvas-providers fails bundle**. esbuild has no `.css` loader
+        on bundleProviders. If a customer imports CSS inside their
+        canvas.providers.tsx, the bundle throws, the worker catches, falls
+        back to bare-render, and logs the failure. Documented in
+        apps/web/CONVENTIONS.md; observable in worker logs. Customer remedy:
+        move styles to globals.css. Not blocking.
+      - **Bundle weight on theme-aware iframes**. Every iframe now loads the
+        providers bundle on top of the component bundle. The full v1 4-
+        provider stack pulls next-themes + @tanstack/react-query + next-intl
+        + framer-motion transitive trees (~30–100KB minified depending on
+        which subset detected). HTTP cache amortizes within the 15-min
+        signed-URL TTL. Observation only — measure at scale before
+        optimizing.
+      - **v1 known-providers list breadth**. Only 4 providers in v1: next-
+        themes, @tanstack/react-query, next-intl, framer-motion. MUI / Chakra
+        / Mantine / @emotion / styled-components customers fall through to
+        origin='none' detection and need canvas.providers.tsx. List
+        expansion = 1 row + 1 harness case per provider. Cheap PR12+ follow-
+        up driven by real customer signal.
+
+      PR1–PR10 known-risks resolved this session: none. (PR11 is a net add.)
+
+      Pre-existing, not yours to fix: same set as PR10.
+    </known-risks>
+
+    <next>
+      Step 5 sub-PRs still to ship:
+      - **PR12 candidate = Step 5.5 + Step 5.6 bundle** (per OWNER MANDATE
+        chain-compression directive; defer decision to PR12 kickoff):
+        - Step 5.5 — Component.canvas.tsx per-component override. Arch-
+          brief §11.4 tags this as v2, NOT v1; if PR12 owner picks the bundle,
+          document the deviation explicitly in `&lt;deviations&gt;` (same shape
+          PR11 used to align WITH §11.4). Worker scans for sibling
+          `&lt;entry&gt;.canvas.tsx`, parses exported `controls` via ts-morph
+          literal-only, merges into the per-component manifest's controls
+          field. UI side: properties-panel renders the merged controls /
+          named presets.
+        - Step 5.6 — RSC sidebar disposition. Promote PR7's inline
+          `maybe-rsc` / `unsupported` failure tile to a sidebar greyed-out
+          leaf with explicit "Server component — not supported" note per
+          architecture-brief §3 disposition 1.
+
+      Step 5 polish (deferrable past PR12):
+      - PR10-introduced known-risks (multi-replica reconciler jitter,
+        404-persistent instance deactivation, .env.example RECONCILER_* +
+        DISABLE_RECONCILER docs).
+      - PR11-introduced known-risks (stale providers bundle on removal,
+        v1 known-providers list breadth).
+      - Connect-gate refusal logging (PR9).
+      - Near-miss version hints (PR9).
+      - Monorepo workspace-aware scan (PR9).
+      - node_modules cache LRU eviction (PR6).
+      - Theme inheritance via init payload (PR7) — partially obsoleted by
+        PR11 since providers wrap now happens at the iframe-runtime layer.
+      - Per-component diff-skip via esbuild metafile (PR6).
+      - Bundle export discovery heuristic / `entryExportName` field (PR7).
+
+      R7/R9 still deferred (Railway + GitHub App URLs + CORS lock + custom-
+      domain DNS + cross-origin preview subdomain + Realtime first-deploy
+      settle window). With Step 5.3+5.4 closed the system honors customer
+      theme-aware components for the v1 known stack — one more "looks like
+      our bug but isn't" surface eliminated for the design-system persona.
+
+      Before R7/R9: no PAT was taken this session — no shred / deletion
+      required.
+    </next>
+  </pr>
 </migration-log>

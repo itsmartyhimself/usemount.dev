@@ -12,6 +12,7 @@
     "verify:realtime": "tsx scripts/verify-realtime.ts",
     "verify:connect-gate": "tsx scripts/verify-connect-gate.ts",
     "verify:reconciler": "tsx scripts/verify-reconciler.ts",
+    "verify:providers": "tsx scripts/verify-providers.ts",
     "e2e:fresh-clone": "tsx scripts/e2e-fresh-clone.ts",
     "build:preview-runtime": "tsx scripts/build-preview-runtime.ts",
     "build": "tsc -b",

@@ -21,7 +21,7 @@
 //  12. destroy tmpfs source dir (NOT the persistent node_modules cache)
 
 import { createHash } from "node:crypto"
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { performance } from "node:perf_hooks"
 import path from "node:path"
@@ -33,7 +33,7 @@ import type { BuildManifest } from "@usemount/shared"
 import { getInstallationToken } from "../github/auth.js"
 import { supabaseAdmin } from "../supabase/admin.js"
 
-import { bundleComponent, bundleGlobalsCss } from "./bundle.js"
+import { bundleComponent, bundleGlobalsCss, bundleProviders } from "./bundle.js"
 import { shallowClone } from "./clone.js"
 import { installDeps } from "./deps.js"
 import {
@@ -44,6 +44,7 @@ import {
 import { completeJob, failJob, heartbeat, leaseNextJob } from "./lease.js"
 import { syncManifests } from "./manifests.js"
 import { parseMountConfig } from "./mount-config.js"
+import { PROVIDERS_AUTO_FILENAME, resolveProvidersSource } from "./providers.js"
 import { uploadCss, uploadJs } from "./storage.js"
 import type { BuildJob, InstanceRow, RepoConnectionRow } from "./types.js"
 
@@ -235,6 +236,51 @@ async function processJob(
       job.commit_sha,
       mount.resolvedComponentsDir,
     )
+    if (isStolen()) return
+
+    // Step 5.3 + 5.4 — resolve and bundle the providers layer once per build.
+    // canvas.providers.tsx (customer override) wins; otherwise auto-detect from
+    // app/layout.tsx. Origin "none" means bare render (PR7 behavior, no
+    // regression). Failure here is non-fatal: fall back to bare render, the
+    // hint surfaces in the log for customer debugging.
+    const providersResult = resolveProvidersSource(cloneResult.workDir)
+    if (providersResult.source !== null) {
+      const providersPath = path.join(cloneResult.workDir, PROVIDERS_AUTO_FILENAME)
+      writeFileSync(providersPath, providersResult.source, "utf8")
+      const providersHash = createHash("sha256")
+        .update(providersResult.source)
+        .digest("hex")
+        .slice(0, 16)
+      try {
+        const providersBytes = await bundleProviders({
+          entry: providersPath,
+          workDir: cloneResult.workDir,
+          tsconfigPath,
+        })
+        await uploadJs({
+          instanceId: instance.id,
+          slug: "providers",
+          sourceHash: providersHash,
+          bytes: providersBytes,
+        })
+        console.log(
+          `[worker:${workerId}] providers bundled (origin=${providersResult.origin}, detected=[${providersResult.detected.join(",")}], hash=${providersHash.slice(0, 7)})`,
+        )
+        if (providersResult.hints.length > 0) {
+          for (const h of providersResult.hints) {
+            console.log(`[worker:${workerId}] providers hint: ${h}`)
+          }
+        }
+      } catch (e) {
+        console.warn(
+          `[worker:${workerId}] providers bundling failed: ${(e as Error).message} (continuing with bare render)`,
+        )
+      }
+    } else {
+      console.log(
+        `[worker:${workerId}] providers: none (${providersResult.hints.join("; ")})`,
+      )
+    }
     if (isStolen()) return
 
     const project = new Project({

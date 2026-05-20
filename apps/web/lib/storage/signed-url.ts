@@ -6,11 +6,14 @@
 // it sees only short-lived signed URLs the route handler embedded in the
 // HTML.
 //
-// Storage object keys (PR6 storage.ts):
-//   <instanceId>/<slug>.<source_hash>.js   — per-component bundle
-//   <instanceId>/<slug>.<source_hash>.css  — per-component CSS (optional)
-//   <instanceId>/globals.<source_hash>.css — instance globals (worker emits
+// Storage object keys (PR6 storage.ts + PR11 providers.ts):
+//   <instanceId>/<slug>.<source_hash>.js     — per-component bundle
+//   <instanceId>/<slug>.<source_hash>.css    — per-component CSS (optional)
+//   <instanceId>/globals.<source_hash>.css   — instance globals (worker emits
 //     `slug: "globals"` so the path is predictable; hash changes per build)
+//   <instanceId>/providers.<source_hash>.js  — Step 5.3+5.4 providers bundle
+//     (auto-emit from layout.tsx OR canvas.providers.tsx override; absent
+//     when the worker detected no known providers)
 //
 // `import "server-only"` guards against accidental client import — the
 // service-role key MUST NOT leak to the browser bundle.
@@ -62,6 +65,40 @@ export async function signGlobalsCss(
     throw new Error(`signGlobalsCss list ${instanceId}: ${error.message}`)
   }
   const match = (data ?? []).find((f) => /^globals\.[a-f0-9]+\.css$/i.test(f.name))
+  if (!match) return null
+  return signStoragePath(`${instanceId}/${match.name}`)
+}
+
+/**
+ * Locate and sign the current instance providers bundle (Step 5.3 + 5.4).
+ *
+ * Same listing-by-prefix pattern as signGlobalsCss: the worker uploads with
+ * a hash-pinned key (`<instanceId>/providers.<hash>.js`) and overwrites on
+ * every build; the freshest one by `updated_at DESC` is the active bundle.
+ *
+ * Returns null when the worker detected no known providers AND no
+ * canvas.providers.tsx — the iframe bootstrap renders the customer component
+ * bare (PR7 behavior, no regression).
+ *
+ * v1 known-risk (carry-forward from globals.css precedent): if a customer
+ * once had providers (auto or override) and removes them, the stale bundle
+ * stays in Storage and would still be picked up here. Document, don't fix in
+ * v1.
+ */
+export async function signProvidersBundle(
+  instanceId: string,
+): Promise<string | null> {
+  const admin = createSupabaseAdminClient()
+  const { data, error } = await admin.storage
+    .from(BUCKET)
+    .list(instanceId, {
+      limit: 100,
+      sortBy: { column: "updated_at", order: "desc" },
+    })
+  if (error) {
+    throw new Error(`signProvidersBundle list ${instanceId}: ${error.message}`)
+  }
+  const match = (data ?? []).find((f) => /^providers\.[a-f0-9]+\.js$/i.test(f.name))
   if (!match) return null
   return signStoragePath(`${instanceId}/${match.name}`)
 }
