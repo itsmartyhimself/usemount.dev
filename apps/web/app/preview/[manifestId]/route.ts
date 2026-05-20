@@ -34,6 +34,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 import {
   SIGNED_URL_TTL_SECONDS,
   signGlobalsCss,
+  signProvidersBundle,
   signStoragePath,
 } from "@/lib/storage/signed-url"
 import {
@@ -92,6 +93,7 @@ export async function GET(
   let bundleUrl: string
   let perComponentCssUrl: string | null = null
   let globalsCssUrl: string | null = null
+  let providersUrl: string | null = null
   try {
     bundleUrl = await signStoragePath(row.artifact_url)
     if (row.source_hash) {
@@ -103,6 +105,9 @@ export async function GET(
       }
     }
     globalsCssUrl = await signGlobalsCss(row.instance_id)
+    // Step 5.3 + 5.4 — providers bundle is optional; null when the worker
+    // detected no known providers AND no canvas.providers.tsx was supplied.
+    providersUrl = await signProvidersBundle(row.instance_id)
   } catch (e) {
     return errorResponse(`storage signing failed: ${(e as Error).message}`, 500)
   }
@@ -115,6 +120,7 @@ export async function GET(
     bundleUrl,
     perComponentCssUrl,
     globalsCssUrl,
+    providersUrl,
     protocolVersion: IFRAME_PROTOCOL_VERSION,
   })
   return new Response(html, {
