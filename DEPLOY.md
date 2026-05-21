@@ -157,6 +157,11 @@ That's the whole product working end-to-end.
   manager isn't available (Part 3, `corepack enable`), or the
   `NODE_MODULES_CACHE` path isn't writable (confirm
   `/tmp/usemount-node-modules-cache`).
+  - **If the worker errors on `spawn pnpm`/`yarn` *despite* Part 3** → corepack
+    enabled at build time didn't carry over to the running container. Fix:
+    change the **api** service's **Start command** to run it at startup too —
+    `corepack enable && pnpm --filter @usemount/api start` (swap `pnpm`→`yarn`
+    to match the repo). (npm-only repos don't hit this.)
 - **Builds time out or run out of memory** → component builds can need 1–4 GB
   RAM and 30–60s. Bump the api service's resources, or test with a smaller
   repo first.

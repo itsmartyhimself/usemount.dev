@@ -4029,6 +4029,10 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       config (URLs, secrets) → DEPLOY.md.
 
       First-deploy risk register (pre-empted in DEPLOY.md Troubleshooting):
+      - **esbuild + ts-morph were in devDependencies** but are runtime imports
+        of the build worker → FIXED this PR (moved to dependencies). Would have
+        crashed the worker on the first build if Railway pruned devDeps. Caught
+        in the advisor pass.
       - NODE_MODULES_CACHE default `/var/lib/usemount/...` not writable on
         Railway → set `/tmp/usemount-node-modules-cache`.
       - Build worker shells out to the CUSTOMER's package manager
@@ -4054,6 +4058,15 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
 
         MOD apps/api/.env.example — documents WEB_ORIGIN + NODE_MODULES_CACHE
         (writable-path note) + the optional DISABLE_*/RECONCILER_* flags.
+
+        MOD apps/api/package.json — moved `esbuild` + `ts-morph` from
+        devDependencies to dependencies. The build worker imports both at
+        RUNTIME (bundle.ts, introspect.ts, providers.ts, mount-config.ts,
+        component-presets.ts); a production install that prunes devDeps
+        (common on Railway with NODE_ENV=production) would crash the worker on
+        the first real build with "Cannot find module". They are genuine
+        runtime deps, not build-time. `react-docgen-typescript` stays in
+        devDeps (comment-only reference in introspect.ts, never imported).
 
         NEW DEPLOY.md (repo root) — the first-deploy runbook: secrets rule,
         two-service Railway setup (Watch Branch = staging), env vars from the
