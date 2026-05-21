@@ -3613,4 +3613,353 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       required.
     </next>
   </pr>
+
+  <pr id="12" branch="feat/migration-step-5.5" base="staging" covers="Step 5.5 + Step 5.6"
+      verified="builds+harness+no-regression+boot-smoke+full-stack-smoke" date="2026-05-21">
+    <secrets-policy>No PAT requested or staged this session. PR12 is a worker-
+      pipeline addition (component-presets.ts literal-only parser + worker wire),
+      a web-side panel section + sidebar disposition note, a customer-facing
+      CONVENTIONS.md update, and a pure-FS harness. The existing service-role
+      admin client (already in env) covers the no-regression sweep; nothing
+      PR12 added needs the Management API.</secrets-policy>
+
+    <decisions>
+      <decision id="scope" name="PR12 bundle: 5.5+5.6 vs 5.6-only"
+                answer="5.5 + 5.6 bundle (owner-confirmed at kickoff)">
+        OWNER MANDATE chain-compression directive forwarded since PR10. Audit
+        clean (no blocker pivot). Owner picked the bundle at the kickoff
+        ask-user-question. Both are the first UI-touching changes in Step 5
+        (5.5 = properties panel, 5.6 = sidebar), both ride the existing
+        manifest fields (no migration), and both improve the "customer can see
+        + use all their components" promise.
+      </decision>
+      <decision id="11.4-correction" name="is Component.canvas.tsx a v2 hoist?"
+                answer="NO — PR11 misattributed §11.4; the presets override is v1 Step 5">
+        PR11's &lt;decision id="scope"&gt; deferred 5.5 on the belief that
+        architecture-brief §11.4 (line 288) tags Component.canvas.tsx as v2.
+        Re-reading the primary source: line 288's subject is the PROVIDERS
+        wrapper throughout — "Manifest needs an optional **wrapper** … v1 ships
+        a single optional **wrapper** file (`canvas.providers.tsx`); v2 supports
+        per-component **wrappers**." The v2 tag is per-component PROVIDER
+        wrappers, NOT the controls/presets override. The override file is v1
+        everywhere it appears: arch-brief lines 48/137/289/309 and —
+        decisively — dashboard-build-plan line 225, which lists it under
+        **Step 5** ("Document the override file (`Component.canvas.tsx`) for
+        power users"). So shipping 5.5 now is spec-aligned v1 work, not a v2
+        deviation. Surfaced to the owner verbatim at kickoff; owner proceeded
+        with the bundle.
+      </decision>
+      <decision id="5.5-scope" name="presets-only vs presets+controls-schema-override"
+                answer="presets only — controls-schema override deferred to PR13+">
+        The override file has TWO spec-supported uses: (a) named presets / fixed
+        prop combinations as scenarios — the DOMINANT Step 5 language
+        (arch-brief 48/56, dashboard 249/260) and the purpose the pre-built
+        `BuildManifest.states` field was shaped for (build-manifest.ts:61-63
+        comment: "named scenario presets (Component.canvas.tsx overrides, Step
+        5) → states_json"); and (b) a control-schema override path for
+        introspection residuals — generics, branded/opaque types, huge
+        re-exports (arch-brief:289). Owner leaned toward doing both ("might as
+        well, adjacent task") but explicitly delegated: "if there's a good
+        reason not to, go with 1." Good reason: presets write to `states_json`,
+        a NEW empty field — purely additive, cannot affect a component that
+        doesn't opt in. Controls-schema override would MUTATE `variants_json`,
+        the field every component already renders its panel from — a buggy
+        override-merge there is a core-render-path regression surface for
+        components that have no override file. It deserves its own focused PR
+        with its own verification, and its real payoff (fixing introspection
+        gaps) needs real connected repos to design the merge rules against (the
+        GitHub App still has 0 installs). Queued as the lead PR13 candidate.
+      </decision>
+      <decision id="preset-semantics" name="how applying a preset sets props"
+                answer="defaults + preset overrides (clean reproducible scenario)">
+        `applyPreset(values)` in canvas-controls-context = `setProps({
+        ...manifest.defaultProps, ...values })`. Picking the same preset twice
+        is reproducible; props the preset doesn't name revert to their
+        synthesized defaults. Matches the "named scenario" framing (a scenario
+        is a complete state, not a partial layer on whatever the user last
+        toggled). Live update rides the existing props→iframe post path, so
+        IFRAME_PROTOCOL_VERSION stays at 1 (no postMessage shape change).
+      </decision>
+      <decision id="preset-export-name" name="customer-facing export name"
+                answer="`export const presets` (maps internally to states_json)">
+        Owner picked `presets` over `states` at kickoff — intuitive, matches
+        arch-brief "named presets" language. Internally it lands on
+        `BuildManifest.states` / `states_json` (no rename of the storage
+        column / shared field). Documented in apps/web/CONVENTIONS.md.
+      </decision>
+      <decision id="override-file-name" name="per-component override file name"
+                answer="`&lt;Component&gt;.usemount.tsx` (e.g. Button.usemount.tsx)">
+        Spec name was `Component.canvas.tsx`; owner flagged "canvas" as the
+        pre-rebrand working name and asked for Mount branding. The override is
+        PER-COMPONENT (sibling to each component), so a single repo-level
+        `usemount.tsx` can't work — the sibling form is `Button.usemount.tsx`
+        next to `Button.tsx`. Added `usemount` to the worker's COMPONENT_SKIP
+        regex so sibling files are never treated as buildable entries. PR11's
+        repo-root `canvas.providers.tsx` keeps its name this PR (renaming a
+        just-shipped customer convention is its own decision) — naming-
+        consistency flagged as a PR13 candidate.
+      </decision>
+      <decision id="states-field-reuse" name="shared-type change for presets?"
+                answer="NONE — BuildManifest.states already exists and already flows to the client">
+        `BuildManifest.states: Record&lt;string, unknown&gt;` (build-manifest.ts:63)
+        → `states_json` column (manifests.ts) → client manifest
+        (from-supabase.ts:105 `states: r.states_json ?? {}`). All pre-built by
+        PR6 for exactly this Step 5 feature. PR12 only flips the worker from
+        emitting `states: {}` to `states: presets`. No shared-type change, no
+        migration, no protocol bump.
+      </decision>
+      <decision id="rsc-note" name="5.6 disposition note style"
+                answer="persistent inline badge + full copy via native title (owner: persistent)">
+        RSC + build-failed leaves were ALREADY greyed + non-clickable
+        (from-supabase.ts:142 `disabled`), but indistinguishable and with no
+        explanation. Owner picked "persistent inline label" over hover-only.
+        Row already has a `trailing` `badge` slot (no Row refactor): maybe-rsc
+        → "Server" tag, unsupported → "Failed" tag, each carrying the full copy
+        ("Server component — not supported" / "This component couldn't be
+        built") on a native `title` for hover. Threaded `manifestKind` from the
+        manifest row onto LeafRecord (it was discarded at from-supabase.ts:146,
+        hardcoded "component"). Distinguishing the two `kind`s addresses the
+        advisor catch that they shared one indistinguishable greyed treatment
+        (arch-brief failure modes 1 + 6).
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Three parallel Explore agents + direct primary-source reads + an advisor
+      pass BEFORE code. PR11's prioritised register rolls forward unchanged;
+      PR12 adds the items in &lt;known-risks&gt;. No blocker — bundle shipped as
+      recommended (no pivot).
+
+      PR11 surface — re-verified PASS (11/11 items):
+      - providers.ts import discriminator (localName-keyed map; duplicate
+        `import { ThemeProvider, ThemeProvider as TP }` is safe — distinct local
+        keys, use-site `seenKeys` dedup on sourceModule#exportName). PASS.
+      - providers.ts `{children}` walker stops at FunctionDeclaration /
+        ArrowFunction / FunctionExpression / ReturnStatement; async RootLayout
+        is still SyntaxKind.FunctionDeclaration → handled. PASS.
+      - providers.ts ts-morph API: the `getNameNode().getText()` JsxAttribute
+        bugfix is in place (line 302); `ImportSpecifier.getName()` (line 224) is
+        the correct stable call. PASS.
+      - KNOWN_PROVIDERS = 4 v1 providers with curated defaults (next-intl
+        `messages={{}}`). PASS.
+      - iframe-html.ts Promise.all loads bundle + providers before `ready`
+        (Component never renders without required Providers); pickProviders
+        validates default-export fn + references CONVENTIONS.md;
+        `React.createElement(Providers, null, tree)` == `&lt;Providers&gt;{tree}&lt;/Providers&gt;`. PASS.
+      - reconciler.ts `running` flag re-entry guard — a tick cannot overlap
+        itself (scheduleNext only re-arms in finally after running=false). PASS.
+      - support-matrix.ts extractMajor regex strips ^/~/&gt;=/&lt;/v and ranges;
+        bun.lock + bun.lockb in the required-lockfile message (PR10 correction
+        intact). PASS.
+      - GitHub-App-only seam: build/provider path uses getInstallationToken /
+        getInstallationOctokit only; zero OAuth-client imports under
+        apps/api/src/build. PASS (R1 honored).
+      - Security scan: no `eval`/`new Function`, no `import()` of customer
+        code; mount-config + providers + the new component-presets parser are
+        AST-only. No hardcoded secrets (only the clone.ts stderr token-scrub).
+        PASS.
+
+      §11.4 misattribution catch (see &lt;decision id="11.4-correction"&gt;) — the
+      one substantive finding: a framing correction in PR11's docs, not a code
+      bug. It REMOVES a deviation rather than adding one.
+
+      Prioritised risk register (rolls forward to PR13 handover):
+      - BLOCKER: none. HIGH: none open.
+      - MEDIUM (Step 5/5.x polish): PR10 (multi-replica reconciler jitter,
+        404-persistent retry, .env.example RECONCILER_* docs), PR9 (refusal
+        logging, near-miss hints, monorepo refusal), PR6 (node_modules LRU),
+        PR11 (stale providers bundle on removal, v1 known-providers breadth) —
+        all unchanged; PR12 added the items below.
+      - LOW (R7/R9 gate): unchanged.
+
+      Brand-WIP files (4 modified + 2 deleted + 4 untracked + design-philosophy/
+      Design Purgatory/) untouched throughout audit + branch + edits + commits.
+    </audit-findings>
+
+    <step-5.5-5.6 title="Component.usemount.tsx named presets + RSC sidebar disposition">
+      <code>
+        NEW apps/api/src/build/component-presets.ts (+197) —
+        `resolveComponentPresets(componentEntry)` returns
+        `{ presets: Record&lt;string, Record&lt;string, unknown&gt;&gt;; hints }`.
+        Sibling path via `presetFilePath` (`Button.tsx` → `Button.usemount.tsx`).
+        STATIC AST ONLY, never import()/eval — same posture as mount-config.ts.
+        Reads `export const presets = { "&lt;name&gt;": { &lt;prop&gt;: &lt;literal&gt; } }`;
+        each preset value must be an object literal of literals (string / number
+        / negative number / boolean / null / nested literal object / literal
+        array / no-substitution template). NON-fatal by construction: a missing
+        file → {} silently; a malformed file / non-literal value → that preset
+        skipped with a hint, never a thrown error (enrichment, not survival —
+        arch-brief §body). Fully internally try/caught so it can't fail a
+        component build.
+
+        MOD apps/api/src/build/worker.ts (+12/-2) — `usemount` added to
+        COMPONENT_SKIP (sibling overrides never become entries); per-component
+        loop calls resolveComponentPresets after deriveControls/classifyGap,
+        logs hints, and pushes `states: presets` (was `states: {}`).
+
+        MOD apps/web/lib/registry/types.ts (+5) — LeafRecord gains optional
+        `manifestKind?: BuildManifestKind` (Step 5.6 disposition).
+        MOD apps/web/lib/registry/from-supabase.ts (+3) — sets
+        `manifestKind: kind` on each leaf (was discarded; hardcoded "component").
+        MOD apps/web/components/live/sidebar-panel/sidebar-leaf.tsx (+22) —
+        computes a disposition note from manifestKind and passes a `trailing`
+        badge to Row (maybe-rsc → "Server"; unsupported → "Failed"); full copy
+        on a native `title`. Disabled/non-clickable behavior unchanged (it was
+        already disabled).
+
+        MOD apps/web/components/live/canvas-controls/canvas-controls-context.tsx
+        (+12/-2) — adds `applyPreset(values)` = defaults + preset overrides.
+        MOD apps/web/components/live/canvas-controls/properties-panel.tsx
+        (+43/-1) — destructures applyPreset; derives `presetEntries` from
+        `manifest.states`; renders a "Presets" Section (chip buttons) at the top
+        of the panel before Variants.
+
+        MOD apps/web/CONVENTIONS.md (+38) — NEW "Component presets
+        (customer-facing)" section: `&lt;Component&gt;.usemount.tsx` sibling, strict
+        `export const presets` literal-only contract, skip-with-hint behavior,
+        slots out of scope.
+
+        NEW apps/api/scripts/verify-presets.ts (+305) — 12 scenarios, 39
+        assertions, pure FS. Covers: sibling path resolution; no-file silence;
+        happy multi-preset; all literal kinds; non-literal rejection (identifier
+        ref, call expr, JSX, substituted template); partial keep/skip; non-
+        object preset; wrong/missing export; malformed-source no-throw.
+
+        MOD apps/api/package.json (+1) — `verify:presets` script.
+
+        MOD migration-plan.md — this `&lt;pr id="12"&gt;` entry.
+      </code>
+    </step-5.5-5.6>
+
+    <deviations>
+      - **No v2 deviation** — see &lt;decision id="11.4-correction"&gt;. PR12's
+        re-read of the primary source found the presets override is v1 Step 5,
+        not the v2 item PR11 took it for, so shipping it diverges from nothing.
+      - **Per-component PROVIDER wrappers remain v2 / unbuilt** — the genuine
+        §11.4 v2 item. PR12 does NOT add per-component canvas.providers files;
+        PR11's single repo-root canvas.providers.tsx is the v1 provider story
+        and is untouched.
+      - **Controls-schema override deferred** (see &lt;decision id="5.5-scope"&gt;) —
+        v1 5.5 = named presets only. The introspection-residual control-override
+        path (arch-brief:289) is the lead PR13 candidate.
+      - **No schema migration, no protocol bump, no shared-type change** —
+        presets ride the pre-built `states`/`states_json` path; the disposition
+        note rides the existing `kind` column.
+    </deviations>
+
+    <verification gate="PR12" result="PASS">
+      verify-presets: 39/39 PASS (new harness, 12 scenarios).
+      No-regression (all 7 prior harnesses):
+        verify-providers 34/34, verify-iframe 41/41, verify-reconciler 20/20,
+        verify-connect-gate 40/40, verify-push-webhook 12/12,
+        verify-build-worker 14/14 (pkill `tsx watch src/index.ts` precondition
+        cleared), verify-realtime 6/6 (first run 4/5 — the PR8-documented
+        publication-refresh window; ~15s settle + re-run passed cleanly).
+      Total: 206/206 across 8 harnesses.
+
+      Builds GREEN:
+      - `pnpm --filter @usemount/shared build` (tsc -b) clean.
+      - `pnpm --filter @usemount/api build` (tsc -b) clean.
+      - `pnpm exec tsc --noEmit` (apps/web) clean (1 caught error en route —
+        `font` vs `fontSize` on the preset chip — fixed before declaring done).
+      - `pnpm exec next build` (apps/web) — Compiled successfully in 3.2s, 10
+        routes intact incl. ƒ /preview/[manifestId], ƒ /connect,
+        ƒ /connect/callback, ƒ /[workspace]/[repo]/[branch], middleware.
+
+      Port-boot smoke (HTTP-only): PORT=4022 + DISABLE_BUILD_WORKER=1 +
+      DISABLE_RECONCILER=1 → `usemount.dev API running on port 4022`, no worker/
+      reconciler lines, clean SIGTERM.
+      Full-stack smoke: PORT=4023 + RECONCILER_FIRST_DELAY_MS=3000 +
+      RECONCILER_INTERVAL_MS=10000 → `[worker:...] startup`, `[reconciler]
+      startup`, `usemount.dev API running on port 4023`, `[reconciler] tick: 0
+      checked, 0 enqueued, 0 errors`, clean SIGTERM. (Ports 4020/4021 held by
+      stale dev servers from prior sessions — used 4022/4023; not killed.)
+
+      Brand-WIP files untouched across branch cut + edits + commits.
+
+      NOT exercised (deferred — owner-runnable):
+      - End-to-end preset chain on a REAL customer build: a connected repo with
+        a `Button.usemount.tsx` sibling → worker parse → `states_json` row →
+        client manifest → panel preset button → live iframe re-render. The
+        harness covers the parser (pure FS) and the no-regression sweep covers
+        the worker/manifest/web wiring, but the full chain only runs when the
+        owner installs the GitHub App and connects a repo that ships an override
+        file. Same gap shape as PR10's live-GitHub fetch + PR11's live provider
+        chain.
+      - 5.6 sidebar note rendering verified by `next build` + type-check + code
+        review; not by an automated UI test (the codebase has no UI-render test
+        harness — `next build` is the gate, consistent with all prior web work).
+    </verification>
+
+    <known-risks>
+      Carry-forward (PR3–PR11): R1 two-app footgun, R7 apps/api never deploy-
+      verified, R9 cors('*') + GitHub App URLs unset + D1 same-origin iframe +
+      Realtime first-deploy publication-settle window; PR9 monorepo-refusal +
+      no-refusal-logging + no-near-miss-hints; PR6 node_modules LRU; PR10
+      multi-replica reconciler stampede + 404-persistent retry + RECONCILER_*
+      env docs; PR11 stale providers bundle on removal + CSS-in-canvas-providers
+      fails + bundle weight + v1 known-providers breadth. All unchanged — PR12
+      closed nothing from the open register.
+
+      PR12-introduced:
+      - **Controls-schema override not built** (deliberate, &lt;decision
+        id="5.5-scope"&gt;). Customers with introspection residuals (generics,
+        branded types, huge re-exports) still get the auto-derived panel only;
+        they cannot yet hide/rename/add controls via the override file. Lead
+        PR13 candidate; needs real connected-repo signal to design the merge.
+      - **Per-component build-error text not inline**. 5.6 shows a generic
+        "Failed" tag for `kind=unsupported`; the actual build error is in
+        worker logs / build_jobs, not on the component_manifests row, so it
+        can't render inline on the leaf (arch-brief failure mode 6 wants the
+        error inline). Surfacing it needs a data path (an error column or a
+        build_jobs join). Step 5.x polish.
+      - **Stale presets on override removal**. If a customer adds then deletes
+        `Button.usemount.tsx`, the next build emits `states: {}` and the upsert
+        overwrites the row's states_json — so presets DO revert on rebuild
+        (unlike PR11's providers-bundle staleness, which lingers in Storage).
+        No leak; noted for completeness.
+      - **Override-file naming inconsistency**. PR12 introduces
+        `&lt;Component&gt;.usemount.tsx` while PR11's repo-root provider file stays
+        `canvas.providers.tsx`. Two customer-facing files, two prefixes.
+        Cosmetic; PR13 could rename providers → `usemount.providers.tsx` for
+        consistency (owner-confirmable, it's a just-shipped convention change).
+
+      PR1–PR11 known-risks resolved this session: none (PR12 is a net add).
+      Pre-existing, not yours to fix: same set as PR10/PR11.
+    </known-risks>
+
+    <next>
+      Step 5 sub-PRs are now CLOSED (5.1 PR9, 5.2 PR10, 5.3+5.4 PR11, 5.5+5.6
+      PR12). Remaining before R7/R9:
+
+      PR13 candidate bundle (defer final scope to PR13 kickoff; OWNER MANDATE
+      chain-compression still in force):
+      - **Controls-schema override** (the deferred half of 5.5) — lead
+        candidate. Let the `&lt;Component&gt;.usemount.tsx` file also hide / rename /
+        add panel controls for introspection residuals (arch-brief:289). MUTATES
+        variants_json — own focused PR, own verification, real-repo signal to
+        design the merge precedence.
+      - **Per-component build-error inline** (5.6 follow-on, arch-brief failure
+        mode 6) — needs an error data path to the manifest row.
+      - **Override-file naming consistency** — rename canvas.providers.tsx →
+        usemount.providers.tsx (owner-confirm; pairs with PR12's
+        `*.usemount.tsx`).
+      - PR10/PR11 polish: multi-replica reconciler jitter, 404-persistent
+        instance deactivation, .env.example RECONCILER_* + DISABLE_RECONCILER
+        docs, stale providers bundle cleanup on origin='none', v1 known-
+        providers breadth (MUI/Chakra/Mantine/@emotion on real signal).
+      - PR9 polish: refusal logging, near-miss version hints, monorepo-aware
+        connect-gate scan.
+      - PR6: node_modules cache LRU eviction; per-component diff-skip via esbuild
+        metafile. PR7: bundle export discovery heuristic / entryExportName.
+
+      After Step 5 polish = R7/R9 hosted cutover (Railway deploy + GitHub App
+      Setup/Webhook URLs → Railway URL + CORS lock + custom-domain DNS +
+      cross-origin preview subdomain). Owner-triggered gate; agents do prep PRs.
+      After R7/R9 = Step 6/7 product features (multi-user teams, share links,
+      comments, what's-new panel) — not yet broken into step entries.
+
+      No PAT taken this session — no shred / deletion required.
+    </next>
+  </pr>
 </migration-log>
