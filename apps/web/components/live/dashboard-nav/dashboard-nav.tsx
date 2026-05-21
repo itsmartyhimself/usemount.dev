@@ -45,10 +45,10 @@ export async function DashboardNav() {
           style={{
             display: "inline-block",
             height: 16,
-            width: "calc(16px * 119 / 24)",
+            width: "calc(16px * 103 / 20)",
             backgroundColor: "var(--color-text-primary)",
-            WebkitMaskImage: "url(/SVGs/mount-wordmark.svg)",
-            maskImage: "url(/SVGs/mount-wordmark.svg)",
+            WebkitMaskImage: "url(/SVGs/mount-logo-full.svg)",
+            maskImage: "url(/SVGs/mount-logo-full.svg)",
             WebkitMaskRepeat: "no-repeat",
             maskRepeat: "no-repeat",
             WebkitMaskPosition: "center",

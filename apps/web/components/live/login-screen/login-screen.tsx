@@ -27,18 +27,13 @@ export function LoginScreen() {
           role="img"
           aria-label="Mount"
           style={{
-            display: "inline-block",
-            height: 20,
-            width: "calc(20px * 119 / 24)",
-            backgroundColor: "var(--color-text-primary)",
-            WebkitMaskImage: "url(/SVGs/mount-wordmark.svg)",
-            maskImage: "url(/SVGs/mount-wordmark.svg)",
-            WebkitMaskRepeat: "no-repeat",
-            maskRepeat: "no-repeat",
-            WebkitMaskPosition: "center",
-            maskPosition: "center",
-            WebkitMaskSize: "contain",
-            maskSize: "contain",
+            display: "block",
+            height: 44,
+            width: 44,
+            backgroundImage: "url(/SVGs/mount-logo-glyph-backdrop.svg)",
+            backgroundRepeat: "no-repeat",
+            backgroundPosition: "center",
+            backgroundSize: "contain",
           }}
         />
       }

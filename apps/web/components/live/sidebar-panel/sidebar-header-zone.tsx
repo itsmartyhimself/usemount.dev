@@ -23,7 +23,7 @@ const headerStyle: CSSProperties = {
 // It is the one header element that stays visible when collapsed: the breadcrumb
 // goes to max-height:0 and the search collapses to height:0, so in the 44px rail
 // the glyph is the sole, centred element. The negative inline margin cancels the
-// header's 8px side padding so the 36px glyph centres in the full rail instead
+// header's 8px side padding so the 44px backdrop fills the full rail instead
 // of being clipped by the 28px padded content box.
 function brandWrapStyle(collapsed: boolean): CSSProperties {
   return {
@@ -38,18 +38,13 @@ function brandWrapStyle(collapsed: boolean): CSSProperties {
 
 const glyphStyle: CSSProperties = {
   display: "block",
-  height: 36,
-  width: 36,
+  height: 44,
+  width: 44,
   flexShrink: 0,
-  backgroundColor: "var(--color-text-primary)",
-  WebkitMaskImage: "url(/SVGs/mount-glyph.svg)",
-  maskImage: "url(/SVGs/mount-glyph.svg)",
-  WebkitMaskRepeat: "no-repeat",
-  maskRepeat: "no-repeat",
-  WebkitMaskPosition: "center",
-  maskPosition: "center",
-  WebkitMaskSize: "contain",
-  maskSize: "contain",
+  backgroundImage: "url(/SVGs/mount-logo-glyph-backdrop.svg)",
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "center",
+  backgroundSize: "contain",
 }
 
 // Single element in both states — padding transitions with the aside so the
