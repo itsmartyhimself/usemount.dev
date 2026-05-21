@@ -13,11 +13,27 @@ import { webhookRoutes } from "./github/webhook.js"
 //
 // /health stays open intentionally; auth is per-route (bearer for the connect
 // surface, HMAC for the webhook). No global auth middleware.
+//
+// CORS (R7/R9 deploy prep): WEB_ORIGIN locks the browser-callable connect
+// surface to the dashboard's origin(s) (comma-separated allowed). Unset →
+// permissive `cors()`, which keeps local dev AND the first Railway deploy
+// working before the web URL is known. Once the dashboard URL exists, set
+// WEB_ORIGIN to it and redeploy to lock down. The GitHub webhook is
+// server-to-server (browsers never call it), so CORS doesn't gate it.
+function corsMiddleware() {
+  const webOrigin = process.env.WEB_ORIGIN?.trim()
+  if (!webOrigin) return cors()
+  const origins = webOrigin
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean)
+  return cors({ origin: origins })
+}
 
 export function buildApp() {
   const app = new Hono()
   app.use("*", logger())
-  app.use("*", cors())
+  app.use("*", corsMiddleware())
   app.get("/health", (c) => c.json({ ok: true }))
   app.route("/", installRoutes)
   app.route("/", repoConnectionRoutes)
