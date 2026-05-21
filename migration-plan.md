@@ -4301,4 +4301,194 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       No PAT taken this session.
     </next>
   </pr>
+
+  <pr id="15" branch="staging (direct doc commits) + itsmartyhimself/REV-plugin upgrade (separate repo)"
+      base="staging" covers="Part 6 connect→build→introspect EXERCISED LIVE (gap closed up to the iframe render); REV Plugin upgraded to Next16/TW4; redirect root-caused; DEPLOY.md fold"
+      verified="connect+build+introspect LIVE; visual iframe render NOT exercised (→ PR16)" date="2026-05-21">
+    <secrets-policy>No secrets in chat, none read by the agent. The owner read the GitHub
+      App config aloud (App ID 3758221, Client ID, callback URLs) — all non-secret. The
+      post-install redirect URLs carry a user-bound short-TTL state JWT (not a long-lived
+      secret); the owner pasted them so the agent could rebuild the host-swapped connect
+      URL. No .env.local read. The REV Plugin upgrade touched only public source.</secrets-policy>
+
+    <decisions>
+      <decision id="scope" name="what PR15 bundles" answer="finish Part 6 + DEPLOY.md fold; controls-override DEFERRED to PR16">
+        Kickoff ask-user-question: owner chose "Part 6 + DEPLOY fold". Controls-schema
+        override deferred because (a) it should be designed against REAL introspection
+        residuals — only available once a repo is connected, which Part 6 just delivered;
+        (b) it mutates variants_json (core render path) and deserves a focused PR over
+        being rushed in. Advisor-confirmed.
+      </decision>
+      <decision id="build-repo" name="how to get a gate-passing repo" answer="UPGRADE REV Plugin (owner's informed choice)">
+        REV Plugin failed the support gate (Next 15 + Tailwind 3). Options offered:
+        upgrade REV Plugin / use another compatible repo / scaffold a demo / defer.
+        Advisor had flagged "upgrade" as off-the-table — but that objection was about
+        breaking someone's LIVE product; the owner clarified REV Plugin is a demo
+        exploration they own, no users, fully git-reversible. With that context the
+        objection dissolves; owner explicitly chose the upgrade.
+      </decision>
+      <decision id="redirect-fix" name="how to handle the localhost:8080 redirect" answer="root-cause + workaround, NO code change">
+        Refuted both prior hypotheses with primary evidence (our code via /auth/callback
+        symmetry + working sign-in; the current GitHub config via the full field read).
+        That NARROWS it to the GitHub install-time Setup-URL-snapshot hypothesis (PR14
+        known-risk #2) — config/install, not code — but that positive claim is UNCONFIRMED
+        until the owner's uninstall+reinstall test. Used the host-swap workaround to unblock
+        connect THIS session. No usemount code changed.
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Two parallel Explore agents + direct verification, PR14 register rolled forward.
+      (1) PR14 review: proxy gate matcher excludes assets + won't block OAuth return, no
+      redirect loop, rotated cookies copied on redirect, supabase config points at railway,
+      rebrand complete — SAFE to build on. (2) connect→build security sweep: IDOR/ownership
+      gates enforced BEFORE repo disclosure (install-callback.ts:122, connections.ts:79);
+      webhook HMAC timingSafeEqual BEFORE JSON parse (webhook.ts:29-40); --ignore-scripts
+      blocks customer postinstall RCE (deps.ts:85); AST-only literal config parse
+      (mount-config/component-presets); no SSRF/path-traversal; install token scrubbed
+      (clone.ts:81); CSRF state token domain-separated + timing-safe (state-token.ts).
+      KNOWN-OPEN (non-blocking → DEPLOY/known-risks): no rate-limit on install-url/
+      install-callback (needs a valid session to abuse); CORS '*' until WEB_ORIGIN set
+      (env-locked, PR13). No blocker to connecting a real repo. No new HIGH/BLOCKER code.
+    </audit-findings>
+
+    <step-redirect title="root-cause the localhost:8080/connect redirect (no code change)">
+      Owner's full GitHub App read (hard-reloaded, saved state): Setup URL =
+      railway/connect/callback ✓; Webhook = railway/github/webhook ✓; OAuth-during-install
+      OFF; callback URLs = supabase + localhost:3000 only. "localhost:8080" is in NO field.
+      Refuted: (a) two-apps (read shows ONE app; slug usemount-dev resolves to it); (b) our
+      /connect/callback origin computation — /auth/callback uses the IDENTICAL
+      `new URL(request.url).origin` (route.ts:9,19) and sign-in lands correctly on railway,
+      proving request.url's origin IS railway. Leading hypothesis (UNCONFIRMED — same
+      elimination reasoning that backfired on the origin theory, so hold it loosely): GitHub
+      binds the Setup URL per installation at install time, and installation 134325166
+      (created in the localhost:8080 dev era) keeps the old value regardless of the
+      now-correct field (= PR14 known-risk #2). **The owner's uninstall + reinstall test
+      (2026-05-22) REFUTED it too:** a clean reinstall produced a NEW installation 134562600
+      (fresh state) that STILL landed on localhost:8080/connect. ALL FOUR hypotheses are now
+      refuted — the redirect is an OPEN MYSTERY handed to PR16 (P0). Decisive next step: capture
+      the redirect chain in DevTools Network ("Preserve log") to see which server emits it;
+      then GitHub's STORED setup_url via GET /app vs the UI, and a Supabase URL-config scan.
+      Workaround this session: the agent rebuilt the host-swapped URL
+      (railway/connect?installation_id=…&state=…) from the owner's pasted redirect — robust
+      vs the owner hand-editing the address bar.
+    </step-redirect>
+
+    <step-upgrade title="upgrade REV Plugin to clear the support gate (separate repo)">
+      The connect-gate (support-matrix.ts) correctly REFUSED REV Plugin (Next ^15 +
+      Tailwind ^3) with a per-violation message — a live exercise of the gate. Upgraded
+      itsmartyhimself/REV-plugin: next→16.2.6, tailwindcss→4.3 + @tailwindcss/postcss,
+      eslint-config-next→16.2.6, dropped autoprefixer; postcss.config → @tailwindcss/postcss;
+      app/globals.css → `@import "tailwindcss"` + `@config "../tailwind.config.ts"` (lowest-
+      risk: keeps the v3 JS config + token mappings rather than a CSS-first rewrite); lint
+      script `next lint`→`eslint .`; added `mount.config.ts` (componentsDir "components/ui").
+      Context7-verified the v4/Next16 specifics. `next build` clean twice. Committed bb1b6af,
+      rebased over the owner's README commit, pushed to main (protected-ref admin bypass).
+    </step-upgrade>
+
+    <step-connect title="connect → build → introspect EXERCISED LIVE (closes the PR6 gap up to render)">
+      Via the host-swap workaround the connect completed end-to-end: install-callback
+      state exchange + assertInstallationOwnership + repo listing + connect-gate (now
+      PASSES) + repo_connection write + `main` pinned. The first build fired → worker
+      cloned, npm-installed, introspected → REV Plugin's components AND their variant/size
+      controls rendered in the dashboard sidebar (folders `ui` + `animate-ui`, matching
+      mount.config's components/ui scope; the 22 components/plugin/* correctly excluded by
+      that config). This is the FIRST time the connect→build→introspect chain has run live —
+      it CLOSES the "NOT exercised" gap PR6–PR14 carried, for everything up to the iframe
+      render.
+    </step-connect>
+
+    <step-deploy-fold title="fold pr14-deploy-failures.md into DEPLOY.md (9 edits)">
+      Per-service build cmds; "Railway defaults Watch Branch to main — change it"; corepack
+      not needed for npm repos (REV Plugin) + the pnpm/yarn caveat; web has no /health (test
+      at root); single-app-dual-role correction (was wrongly "App A + separate App B OAuth");
+      Setup URL save mechanics + the install-time-snapshot gotcha; support-gate prereq
+      (Next16/TW4/React19 + mount.config); blank-canvas + redirect troubleshooting bullets.
+    </step-deploy-fold>
+
+    <deviations>
+      - Direct doc commits on staging (DEPLOY.md + migration-plan.md) — docs don't deploy;
+        matches PR14 precedent. No usemount runtime code changed this PR.
+      - REV Plugin upgrade = changes to a SEPARATE owner-owned repo (owner-authorized AND
+        owner-chosen); pushed to its main.
+      - Redirect NOT fixed in code — root-caused to a GitHub install-time snapshot; real fix
+        is an owner uninstall+reinstall; host-swap workaround used to unblock.
+      - Visual iframe render NOT exercised (blank canvas) — deferred to PR16.
+      - Controls-schema override NOT done — deferred to PR16 (kickoff decision).
+    </deviations>
+
+    <verification gate="PR15" result="MAJOR — connect→build→introspect EXERCISED LIVE; visual render NOT yet">
+      EXERCISED LIVE (first time in the project): the full GitHub-App connect flow
+      (install-callback exchange, ownership, repo listing); the support-gate refusing the
+      under-spec repo then PASSING post-upgrade; repo_connection + branch pinning; the first
+      build_job → worker clone/install/introspect → components + variant/size controls listed
+      in the dashboard. The PR6-carried "NOT exercised" end-to-end gap is CLOSED for the whole
+      chain UP TO the render. REV Plugin builds clean on Next 16 + Tailwind 4.
+
+      NOT EXERCISED (→ PR16, files pinpointed): the VISUAL iframe render — selecting a
+      component shows a BLANK canvas. Leading cause (Explore-traced): the worker's compiled
+      globals.css not reaching the iframe (Tailwind v4 `@config` edge in worker.ts:372-395
+      bundleGlobalsCss; non-fatal, job continues) → component mounts UNSTYLED → zero-size →
+      invisible (iframe stays 1×1px, iframe-mount.tsx INITIAL_W/H). Secondary: signed-URL
+      15-min TTL (signed-url.ts:26), export-heuristic mismatch (iframe-html.ts:130-136). AND
+      preview-render errors are SWALLOWED in prod (iframe-mount.tsx:153-157, stage-content.tsx
+      logs-only) so any failure shows as a blank canvas, not an error tile. The redirect
+      remains UNSOLVED: the owner's uninstall+reinstall test (2026-05-22) refuted the
+      install-time-snapshot lead too (fresh install 134562600 still hit localhost:8080) —
+      ALL hypotheses refuted; handed to PR16 as P0, with a DevTools Network redirect-chain
+      capture as the decisive next step. (Host-swap workaround still unblocks connect.)
+    </verification>
+
+    <known-risks>
+      - **VISUAL RENDER blank (PR16 HEADLINE):** globals.css→iframe (worker.ts:372-395);
+        weak error surfacing (iframe-mount.tsx:153-157, stage-content.tsx:153-157); signed-URL
+        TTL (signed-url.ts:26). A built component is listed + introspected but not visible.
+      - **Redirect (OPEN MYSTERY, PR16 P0):** ALL hypotheses refuted with primary evidence —
+        two-apps (one app), our-code origin (/auth/callback + working sign-in), current GitHub
+        config (full read, no localhost:8080), AND install-time snapshot (owner's clean
+        uninstall+reinstall 2026-05-22 → NEW install 134562600 STILL localhost:8080 — do NOT
+        re-suggest this). Next: capture the redirect chain in DevTools Network (Preserve log)
+        to see which server emits it; read GitHub's STORED setup_url via GET /app vs the UI;
+        scan Supabase URL config for any localhost:8080. Host-swap workaround unblocks connect.
+      - **Component discovery too crude (owner-flagged, PR16 headline):** mount-config picks
+        ONE componentsDir and shows everything under it; real repos mix LIVE components with
+        base layers (radix/shadcn primitives, nested sub-folders, multiple component folders).
+        REV Plugin's real "live" layer is `components/plugin` (22 components), NOT the
+        `components/ui` (8) the PR15 mount.config pointed at. Needs a bulletproof discovery
+        model (heuristic + config + maybe interactive folder-pick) — design WITH the owner.
+        NOTE: this is separate from the blank-render bug — it governs WHICH components list,
+        not whether they display.
+      - Dashboard does not live-update on build completion — manual refresh needed (UX gap).
+      - Install-route rate-limit absent (install-url/install-callback) — needs a valid session;
+        go-live polish. CORS '*' until WEB_ORIGIN set (env-locked).
+      - 1 GB tier held for the REV build (no OOM seen) — watch on heavier repos.
+      - Carry-forward: PR9–PR12 polish; slug-routing/non-unique-slug; /connect/callback
+        session-lapse loses installation_id (v1-acceptable; the snapshot fix is unrelated).
+    </known-risks>
+
+    <correction pr="14">
+      PR14 framed the redirect as an OPEN BLOCKER with hypothesis #1 (two GitHub Apps) most
+      likely. PR15 REFUTES #1 (the owner's read shows exactly ONE app) and initially pointed to
+      hypothesis #2 (GitHub install-time Setup-URL snapshot) — but the owner's uninstall+reinstall
+      test (2026-05-22) REFUTED #2 as well (a fresh installation still hit localhost:8080), so the
+      redirect is now an OPEN MYSTERY for PR16; do NOT re-suggest uninstall+reinstall. Also PR14 +
+      DEPLOY.md described "two separate
+      GitHub apps (App A GitHub App + App B OAuth App)" — that is WRONG: it is ONE app whose
+      OAuth creds also power Supabase sign-in (single app, dual role). Corrected in DEPLOY.md.
+      No prior-PR CODE bug — the connect→build security path audited clean and ran correctly.
+    </correction>
+
+    <next>
+      **PR16 = (1) FIX THE VISUAL RENDER** (worker globals.css→iframe + surface render errors
+      so a component actually displays — the LAST mile of the end-to-end gap); **(2) BULLETPROOF
+      COMPONENT DISCOVERY** (owner-flagged — a robust model for WHICH folder(s)/components to
+      show vs base layers, for arbitrary repo structures; design WITH the owner; REV Plugin's
+      live layer is `components/plugin`); **(3) the deferred controls-schema override** (now
+      designable against REAL residuals); **(4) SOLVE the redirect** (ALL hypotheses refuted incl. uninstall+
+      reinstall — start with a DevTools Network redirect-chain capture, not another guess).
+      Optional polish: dashboard live-update on build completion; install-route
+      rate-limit. True go-live (main + custom domain) stays a SEPARATE owner decision. Handover
+      + diagnostics: plans/pr16-…md. No PAT taken this session.
+    </next>
+  </pr>
 </migration-log>
