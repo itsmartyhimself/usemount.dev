@@ -27,6 +27,9 @@ type CanvasControlsContextValue = {
   manifest: ComponentManifest | null
   props: PropMap
   setProp: (key: string, value: unknown) => void
+  // Apply a named preset (Step 5.5): a clean scenario = defaults + preset
+  // overrides, so picking the same preset twice is reproducible.
+  applyPreset: (values: PropMap) => void
   reset: () => void
 }
 
@@ -64,13 +67,20 @@ export function CanvasControlsProvider({
     setProps((prev) => ({ ...prev, [key]: value }))
   }, [])
 
+  const applyPreset = useCallback(
+    (values: PropMap) => {
+      setProps({ ...(manifest ? manifest.defaultProps : {}), ...values })
+    },
+    [manifest],
+  )
+
   const reset = useCallback(() => {
     setProps(manifest ? { ...manifest.defaultProps } : {})
   }, [manifest])
 
   const value = useMemo<CanvasControlsContextValue>(
-    () => ({ manifest, props, setProp, reset }),
-    [manifest, props, setProp, reset],
+    () => ({ manifest, props, setProp, applyPreset, reset }),
+    [manifest, props, setProp, applyPreset, reset],
   )
 
   return (

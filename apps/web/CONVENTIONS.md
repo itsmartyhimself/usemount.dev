@@ -82,6 +82,44 @@ Rules:
 - Located at `<repo-root>/canvas.providers.tsx` (or `canvas.providers.ts`).
   Not honored from `app/` or `src/`.
 
+## Component presets (customer-facing)
+
+Every component renders live with defaults derived from its prop types — no
+config required. A power user who wants to pin **named scenarios** (fixed prop
+combinations) into the properties panel drops a sibling **`<Component>.usemount.tsx`**
+file next to the component (`Button.usemount.tsx` next to `Button.tsx`) and
+exports a `presets` object. It's opt-in enrichment — typical components never
+need it.
+
+**File shape (strict):**
+
+```tsx
+// Button.usemount.tsx — next to Button.tsx
+export const presets = {
+  "Primary Large": { variant: "primary", size: "lg" },
+  "Danger": { variant: "danger", disabled: true },
+}
+```
+
+Each preset becomes a quick-pick button in the panel. Clicking it applies that
+prop combination on top of the component's defaults (a clean, reproducible
+scenario).
+
+Rules:
+
+- The file must `export const presets = { ... }` as a plain object literal.
+- Each key is the preset name (shown on the button); each value is a props
+  object.
+- **Values must be literals** — string, number, boolean, `null`, or nested
+  literal objects/arrays. The worker parses this file by reading its AST only;
+  it never runs it, so anything that needs evaluation (a function call, a
+  variable reference, JSX, a template with `${}`) is rejected and that preset
+  is skipped (with a hint in the build log). Slots (`ReactNode` props) can't be
+  expressed as a literal and are out of scope for presets.
+- A broken `presets` file never fails the component — it just yields no
+  presets. The component still previews normally.
+- Sibling override files are not built as components themselves.
+
 ## Lazy Loading
 
 This is a core architectural convention, not an afterthought.

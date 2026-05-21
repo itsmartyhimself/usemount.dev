@@ -149,6 +149,9 @@ export function buildRegistry(
       sourcePath: r.folder_path ?? undefined,
       order: leaves.length,
       disabled,
+      // Step 5.6 — carry the build classification so the sidebar can show the
+      // greyed leaf's disposition note ("Server component — not supported").
+      manifestKind: kind,
     })
   }
   // Stable order: alphabetical within each folder, folders alphabetical.

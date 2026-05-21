@@ -13,6 +13,7 @@
     "verify:connect-gate": "tsx scripts/verify-connect-gate.ts",
     "verify:reconciler": "tsx scripts/verify-reconciler.ts",
     "verify:providers": "tsx scripts/verify-providers.ts",
+    "verify:presets": "tsx scripts/verify-presets.ts",
     "e2e:fresh-clone": "tsx scripts/e2e-fresh-clone.ts",
     "build:preview-runtime": "tsx scripts/build-preview-runtime.ts",
     "build": "tsc -b",

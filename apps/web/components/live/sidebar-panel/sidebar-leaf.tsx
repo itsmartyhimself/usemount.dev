@@ -51,6 +51,27 @@ export function SidebarLeaf({ leaf, depth = 1 }: SidebarLeafProps) {
     return { kind: "icon", icon: "cube" } as const
   })()
 
+  // Step 5.6 — disposition note on greyed leaves. RSCs and build-failed
+  // components both render disabled; the persistent tag tells them apart, and
+  // the native `title` carries the full copy on hover (architecture-brief §3
+  // failure modes 1 + 6).
+  const disposition = (() => {
+    if (leaf.manifestKind === "maybe-rsc") {
+      return { tag: "Server", title: "Server component — not supported" }
+    }
+    if (leaf.manifestKind === "unsupported") {
+      return { tag: "Failed", title: "This component couldn't be built" }
+    }
+    return null
+  })()
+
+  const trailing = disposition
+    ? ({
+        kind: "badge",
+        content: <span title={disposition.title}>{disposition.tag}</span>,
+      } as const)
+    : ({ kind: "none" } as const)
+
   const rowNode = (
     <Row
       ref={rowRef}
@@ -58,6 +79,7 @@ export function SidebarLeaf({ leaf, depth = 1 }: SidebarLeafProps) {
       size={depth === 1 ? 28 : 32}
       variant={depth === 1 ? "menu-sub-button" : "menu-button"}
       leading={leading}
+      trailing={trailing}
       active={active}
       disabled={leaf.disabled}
       loading={leaf.loading}
