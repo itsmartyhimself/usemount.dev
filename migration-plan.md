@@ -4140,4 +4140,165 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       No PAT taken this session.
     </next>
   </pr>
+
+  <pr id="14" branch="staging (direct commits — see deviations)" base="staging"
+      covers="R7/R9 live deploy + rebrand + login gate; Part 6 connect BLOCKED"
+      verified="deployed+live+signin+gate; end-to-end NOT exercised" date="2026-05-21">
+    <secrets-policy>No secrets in chat, none read by the agent. The owner entered all
+      keys directly into Railway / GitHub / Supabase UIs from their gitignored
+      .env.local files; the agent never read them. GitHub App IDs/slugs are not
+      secrets and are quoted where useful.</secrets-policy>
+
+    <decisions>
+      <decision id="scope" name="what PR14 bundles"
+                answer="live deploy (primary) + two deploy-driven fixes: owner rebrand + login gate">
+        Kickoff ask-user-question: owner chose to run the live deploy now. The deploy
+        surfaced two things that had to ship for a coherent live product: (a) the
+        owner's uncommitted rebrand was never on staging so Railway built the OLD
+        logo; (b) the dashboard had no auth gate so anon users saw it. Both landed as
+        focused separate commits. Controls-schema override deferred to PR15 (the
+        deploy ate the session, exactly as PR13 predicted).
+      </decision>
+      <decision id="build-cmds" name="Railway per-service build vs root pnpm build"
+                answer="per-service filtered builds">
+        DEPLOY.md said `pnpm build` for both. Refined: api =
+        `pnpm --filter @usemount/api build` (tsc -b builds shared via the project ref
+        in apps/api/tsconfig.json:21); web = `pnpm --filter @usemount/shared build &&
+        pnpm --filter @usemount/web build` (next build does NOT build shared first —
+        no transpilePackages/ref). Root `pnpm build` would cross-build the other app
+        per service + risk the api service failing on web's missing NEXT_PUBLIC_* at
+        build. Verified: clean first deploy, no build iteration.
+      </decision>
+      <decision id="corepack" name="customer package-manager availability"
+                answer="not needed — REV Plugin uses npm (always present in container)">
+        DEPLOY.md Part 3 hedged corepack for pnpm/yarn customer repos. REV Plugin uses
+        npm (package-lock.json). Deferred the corepack-on-start fix (would risk boot
+        if `corepack enable` exits non-zero) to a future pnpm/yarn customer repo.
+      </decision>
+      <decision id="login-gate" name="dashboard auth gate"
+                answer="added gate logic to the EXISTING apps/web/proxy.ts (Next 16 proxy)">
+        proxy.ts already existed (e899904) doing the @supabase/ssr session refresh but
+        never gating. Next 16 renamed middleware→proxy (verified in
+        node_modules/next/dist/docs). Added after getUser: anon→/login,
+        signed-in-on-/login→/, public-exempt /login + /auth/* + /preview/*, cookies
+        copied onto redirects, tested matcher kept. Advisor-reviewed, build-verified
+        (Next registered "ƒ Proxy"). Optimistic UX gate; RLS stays the boundary.
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Three parallel Explore agents + direct verification. PR13 register rolled
+      forward: BLOCKER none, HIGH none open. CLEAN for going public: no hardcoded
+      secrets (all process.env); clone token scrubbed (clone.ts:81); service-role key
+      server-only-guarded (admin.ts/signed-url.ts), never NEXT_PUBLIC_; AST-only
+      literal parsing across mount-config/providers/component-presets/introspect (no
+      import()/eval/require/vm on customer files); --ignore-scripts --frozen-lockfile
+      all PMs (deps.ts:84); webhook HMAC timingSafeEqual BEFORE JSON parse
+      (webhook.ts:67-88); GitHub-App-only auth in the build path (worker.ts:203 etc.);
+      CORS WEB_ORIGIN lock correct (app.ts:23-31); only /health (open) + /github/webhook
+      (HMAC) public, rest bearer-authed. One agent over-escalated the KNOWN
+      NODE_MODULES_CACHE default-path gotcha to "BLOCKER" — reconciled down (DEPLOY.md +
+      .env.example pre-empt it). No security hole → no pivot. MEDIUM (carry): deps.ts:102
+      logs customer install stderr (could echo a customer's own registry token —
+      customer responsibility; doc note).
+    </audit-findings>
+
+    <step-deploy title="R7/R9 live Railway deploy (owner-driven, agent-guided)">
+      1 Railway project, 2 services (@usemount/api + @usemount/web), both Watch Branch
+      = staging, per-service build cmds. Env vars copied by owner from .env.local (api:
+      7 REQUIRED + NODE_MODULES_CACHE=/tmp/usemount-node-modules-cache; web: 3). FIRST
+      deploy CLEAN — both Online, no OOM at the 1 GB trial tier, node@22.22.3, EU-West.
+      Domains: api usemountapi-production.up.railway.app, web
+      usemountweb-production.up.railway.app. GET /health → {"ok":true} (backend's FIRST
+      hosted-container boot — closes the BOOT half of the long gap). URL wire-back: web
+      NEXT_PUBLIC_API_URL=api, api WEB_ORIGIN=web (CORS locked, R9). Sign-in: fixed the
+      hosted Supabase Site URL (was stale localhost:8080) + added railway /auth/callback
+      redirect → GitHub OAuth sign-in works (real avatar). Login gate deployed + verified
+      LIVE. Old demo Railway project deleted by owner; new project renamed usemount.dev.
+    </step-deploy>
+
+    <step-rebrand title="land owner's rebrand (dc17bb4)">
+      New logo/glyph/backdrop/favicon + dashboard-nav/login-screen/sidebar-header-zone
+      were uncommitted working-tree changes (the brand-WIP prior handovers said never to
+      git add). Owner OK'd committing them this session so the deploy matched current
+      brand. SVG refs verified consistent + build-safe (asset URLs, not imports);
+      design-philosophy/ left untracked. Web auto-rebuilt on push.
+    </step-rebrand>
+
+    <step-gate title="login gate in proxy.ts (db29db7) + config.toml URL fix (1276608)">
+      See decision id="login-gate". Also fixed supabase/config.toml's stale site_url +
+      redirect URLs (pointed at the deleted web-production-18dfa1 project) → railway.
+    </step-gate>
+
+    <deviations>
+      - **Committed directly on staging** (no feat/ branch): deploy is owner-clicks; the
+        only code was deploy-driven fixes. Precedent: 9784cea (rebrand) direct on branch.
+      - **Login gate = new scope** beyond "deploy prep" — emerged from the live deploy
+        (anon dashboard) + owner-requested. Kept focused (one file + advisor + build).
+      - **Part 6 NOT complete** — connect→build→preview BLOCKED; the end-to-end gap
+        PR6–PR13 carried is STILL OPEN.
+      - No controls-schema override (deferred to PR15, as PR13's plan allowed).
+    </deviations>
+
+    <verification gate="PR14" result="PARTIAL — deploy live, end-to-end BLOCKED">
+      GREEN: api + web build clean + deployed + Online (first try, no OOM); GET /health
+      → 200 {"ok":true}; CORS WEB_ORIGIN lock echoes the allowed origin; GitHub OAuth
+      sign-in works (real avatar, after the Supabase Site URL fix); login gate verified
+      LIVE by owner (anon /→/login; /login shows for anon; sign-in→dashboard; signed-in
+      /login→/; refresh persists); rebrand live; `pnpm --filter @usemount/web build`
+      clean (Next registered the Proxy).
+
+      NOT EXERCISED (gap STILL OPEN — the point of Part 6): connect REV Plugin → build →
+      preview a live component. BLOCKED on the GitHub App post-install redirect: despite
+      the app's Setup URL being correctly SAVED as
+      https://usemountweb-production.up.railway.app/connect/callback (and "Request user
+      authorization during installation" OFF, so Callback URLs are not in play), clicking
+      Save on the GitHub install page redirects the browser to
+      http://localhost:8080/connect?installation_id=134325166&state=… — wrong host AND a
+      path (/connect) that does NOT match the saved Setup URL (/connect/callback). The
+      string "localhost:8080/connect" is in NO current GitHub App field. See known-risks
+      for hypotheses + a URL-host-swap workaround; full diagnostic in the PR15 handover.
+    </verification>
+
+    <known-risks>
+      **OPEN BLOCKER (hands to PR15): Part 6 install redirect → localhost:8080/connect.**
+      Hypotheses, priority order: (1) **App/slug or ID mismatch** — install URL is
+      github.com/apps/${GITHUB_APP_SLUG||"usemount-dev"}/installations/new
+      (install-callback.ts:91); if Railway GITHUB_APP_SLUG/GITHUB_APP_ID resolve to a
+      DIFFERENT/OLDER app than the one the owner configured (name "usemount.dev", App ID
+      3758221) whose Setup URL is still localhost:8080/connect, the owner edits one app
+      while installs hit another. CHECK: owner clicks "Install GitHub App", read the exact
+      github.com/apps/<slug> URL; compare to app 3758221's real slug; compare Railway
+      GITHUB_APP_ID to 3758221; check for duplicate GitHub Apps. (2) **GitHub cached the
+      install-time Setup URL** — installation 134325166 was first created when the Setup
+      URL was localhost; a clean UNINSTALL + reinstall (Setup URL now correct) may fix it.
+      (3) grep repo + Railway env + owner .env.local for "8080"/"localhost".
+      WORKAROUND (bypasses the redirect): on landing at localhost:8080/connect?installation_id=…&state=…,
+      edit the host to usemountweb-production.up.railway.app + Enter — /connect form
+      exchanges installation_id+state directly (connect-repo-form.tsx:93-98); state is
+      short-TTL so act immediately.
+      Carry-forward: 1 GB build memory unproven for real component builds (arch-brief §11:
+      1–4 GB) — may need a Railway tier bump at first REV build; /connect/callback
+      session-lapse during install loses installation_id (v1-acceptable); config.toml was
+      stale (FIXED); PR9–PR12 polish + pre-existing slug-routing/non-unique-slug all open.
+    </known-risks>
+
+    <correction pr="none">
+      No prior-PR CODE bugs found. The deploy surfaced CONFIG debt (stale localhost URLs
+      in hosted Supabase + the GitHub App, leftover from local dev), not code regressions.
+      PR13's deploy-prep held (CORS, env gate, esbuild/ts-morph runtime deps).
+    </correction>
+
+    <next>
+      **PR15 = (1) FINISH PART 6 FIRST** (diagnose the localhost:8080/connect redirect;
+      try the URL-swap workaround to unblock fast; then properly fix so future
+      installs/users don't hit it), **then (2) the deferred controls-schema override +
+      polish.** When REV Plugin connects → builds → previews, the long-standing "NOT
+      exercised" end-to-end gap finally closes — record it in <pr id="15">. True go-live
+      (main deploy + custom domain usemount.dev) stays a SEPARATE owner decision after the
+      staging test is green. Full handover + diagnostic: plans/pr15-…md. Running failure+fix
+      log (fold into DEPLOY.md): plans/pr14-deploy-failures.md.
+      No PAT taken this session.
+    </next>
+  </pr>
 </migration-log>
