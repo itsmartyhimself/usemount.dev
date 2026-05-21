@@ -17,12 +17,12 @@ project_id = "agyiylncvchzifuzvnew"
 # revert production OAuth. *.up.railway.app is temporary — the custom-domain
 # pass updates this together with the GitHub App + Railway env.
 [auth]
-site_url = "https://web-production-18dfa1.up.railway.app"
+site_url = "https://usemountweb-production.up.railway.app"
 additional_redirect_urls = [
   "http://localhost:3000",
   "http://localhost:3000/auth/callback",
-  "https://web-production-18dfa1.up.railway.app",
-  "https://web-production-18dfa1.up.railway.app/auth/callback",
+  "https://usemountweb-production.up.railway.app",
+  "https://usemountweb-production.up.railway.app/auth/callback",
 ]
 
 # GitHub provider was ENABLED in PR1 (its client_id / client_secret double as
