@@ -3962,4 +3962,182 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       No PAT taken this session — no shred / deletion required.
     </next>
   </pr>
+
+  <pr id="13" branch="feat/migration-deploy-prep" base="staging" covers="R7 deploy prep (env-driven CORS + runbook)"
+      verified="builds+no-regression+boot-smoke" date="2026-05-21">
+    <secrets-policy>No PAT and no secrets handled in-session. The owner's real
+      keys live in their gitignored apps/api/.env.local + apps/web/.env.local
+      and are copied by the owner directly into Railway's variables UI per
+      DEPLOY.md — never through chat, never read by the agent.</secrets-policy>
+
+    <decisions>
+      <decision id="trigger" name="why R7 prep now, ahead of the PR13-doc polish plan"
+                answer="owner pivoted to go-live to actually TEST the product against a real repo (REV Plugin)">
+        After PR12 hand-back the owner asked to set up hosting so the product
+        can be exercised end-to-end (the build worker / webhook chain has only
+        ever been harness-verified — never run in a deployed container). R7/R9
+        is the owner-triggered go-live gate; the owner triggered the prep half.
+        This PR is the agent-side prep; the live cutover is a separate
+        owner+agent loop (DEPLOY.md). The controls-schema-override polish that
+        the prior handover doc framed as "PR13" shifts to PR14.
+      </decision>
+      <decision id="cors-env" name="how to lock CORS without knowing the URL yet"
+                answer="env-driven WEB_ORIGIN; permissive fallback when unset">
+        app.ts `cors()` was wide open (R9 risk). Chicken-and-egg: the real
+        origin isn't known until after the first deploy. Fix: read WEB_ORIGIN
+        (comma-separated) from env — locks to those origins when set, falls
+        back to permissive `cors()` when unset so local dev AND the first
+        deploy keep working. Owner sets WEB_ORIGIN to the web URL after deploy
+        and redeploys to lock. The GitHub webhook is server-to-server so CORS
+        never gated it. Verified: boot with WEB_ORIGIN set echoes
+        `access-control-allow-origin` for an allowed origin; unset = unchanged.
+      </decision>
+      <decision id="deploy-config" name="railway.json/Dockerfile vs dashboard config"
+                answer="dashboard-driven config documented in DEPLOY.md, no config files added">
+        Advisor steer: config-as-code adds a thing to debug on a first deploy
+        when something else will already be broken, and dashboard settings read
+        simpler for a non-technical owner. DEPLOY.md documents the per-service
+        build/start commands + Watch Branch = staging in prose. Config files
+        can land later if the deploy proves to need them.
+      </decision>
+      <decision id="runbook-as-repo-doc" name="where the deploy guide lives"
+                answer="DEPLOY.md at repo root (tracked), not just the handover doc">
+        The runbook is operational + reused across the deploy iterations, so it
+        belongs in the repo, not only in a plans/ handover. Numbered, plain-
+        English, with the two-app seam spelled out A/B, the secrets rule bolded,
+        the staging-not-main branch warning, and the known first-deploy failure
+        modes pre-empted.
+      </decision>
+    </decisions>
+
+    <audit-findings step="0a">
+      Deploy-readiness audit (parallel Explore agent + direct reads). One
+      sub-agent conclusion REJECTED: it claimed "the app is still at Step 1.5,
+      nothing implemented, connecting a repo will fail" — false, contradicted by
+      the migration-log (PR1–PR12 done) and the agent's own quoted evidence (it
+      pasted the working webhook handler + build-worker env contract). Primary
+      source wins; the backend is built and the deploy can exercise the real
+      flow.
+
+      READY as-is: build order (shared→web→api via root `pnpm build`); start
+      cmds (api `node lib/index.js`, web `next start`); PORT binding
+      (process.env.PORT, both apps); fail-fast REQUIRED_ENV gate (index.ts);
+      `/health` open route (app.ts:21); Supabase client split (anon/server/
+      admin); mandatory webhook HMAC verify.
+
+      NEEDS PREP: CORS wide open → fixed this PR (WEB_ORIGIN). Owner-side
+      config (URLs, secrets) → DEPLOY.md.
+
+      First-deploy risk register (pre-empted in DEPLOY.md Troubleshooting):
+      - **esbuild + ts-morph were in devDependencies** but are runtime imports
+        of the build worker → FIXED this PR (moved to dependencies). Would have
+        crashed the worker on the first build if Railway pruned devDeps. Caught
+        in the advisor pass.
+      - NODE_MODULES_CACHE default `/var/lib/usemount/...` not writable on
+        Railway → set `/tmp/usemount-node-modules-cache`.
+      - Build worker shells out to the CUSTOMER's package manager
+        (deps.ts:70-88 detects pnpm/npm/yarn/bun by lockfile); Railway lacks
+        pnpm/yarn by default → `corepack enable` in the api build.
+      - Component builds can need 1–4 GB / 30–60s (arch-brief §11) → may exceed
+        a small Railway tier.
+      - supabase/config.toml's `web-production-18dfa1.up.railway.app` is a prior
+        agent's LOCAL-CLI-config placeholder (git blame: Step 2 / 4.2-prep), NOT
+        a live deploy and NOT the hosted project's auth config — the hosted
+        redirect URLs are set in the Supabase dashboard. Hygiene, non-blocking.
+
+      Prioritised register rolls forward from PR12 unchanged (BLOCKER none,
+      HIGH none open). R7 moves from "deferred" to "in progress (prep done,
+      live cutover next)". Brand-WIP files untouched.
+    </audit-findings>
+
+    <step-r7-prep title="env-driven CORS + deploy runbook">
+      <code>
+        MOD apps/api/src/app.ts — `corsMiddleware()` reads WEB_ORIGIN
+        (comma-separated), locks `cors({ origin })` when set, permissive
+        `cors()` when unset. Replaces the bare `app.use("*", cors())`.
+
+        MOD apps/api/.env.example — documents WEB_ORIGIN + NODE_MODULES_CACHE
+        (writable-path note) + the optional DISABLE_*/RECONCILER_* flags.
+
+        MOD apps/api/package.json — moved `esbuild` + `ts-morph` from
+        devDependencies to dependencies. The build worker imports both at
+        RUNTIME (bundle.ts, introspect.ts, providers.ts, mount-config.ts,
+        component-presets.ts); a production install that prunes devDeps
+        (common on Railway with NODE_ENV=production) would crash the worker on
+        the first real build with "Cannot find module". They are genuine
+        runtime deps, not build-time. `react-docgen-typescript` stays in
+        devDeps (comment-only reference in introspect.ts, never imported).
+
+        NEW DEPLOY.md (repo root) — the first-deploy runbook: secrets rule,
+        two-service Railway setup (Watch Branch = staging), env vars from the
+        owner's .env.local, corepack/package-manager + cache gotchas, URL
+        wire-back, the two GitHub apps (A=App webhook/setup, B=OAuth→Supabase),
+        Supabase redirect URLs, install-on-REV-Plugin + test, troubleshooting,
+        and a note for the agent running it live.
+
+        MOD migration-plan.md — this `&lt;pr id="13"&gt;` entry.
+      </code>
+    </step-r7-prep>
+
+    <deviations>
+      - **No new component / no Step-5 feature this PR** — pure deploy prep +
+        docs. The controls-schema override (prior handover's "PR13") shifts to
+        PR14.
+      - **No config-as-code** (railway.json/Dockerfile) — dashboard-driven,
+        documented in DEPLOY.md prose (see &lt;decision id="deploy-config"&gt;).
+      - **No live deploy performed** — this PR only makes the code deployable +
+        writes the runbook. The actual Railway deploy + GitHub App install +
+        first real test is the next owner+agent session (R7/R9 cutover proper),
+        and remains the owner's go-live gate.
+    </deviations>
+
+    <verification gate="PR13" result="PASS">
+      Builds GREEN: `pnpm --filter @usemount/api build` (tsc -b) clean.
+      No-regression: verify-connect-gate 40/40 (the harness that exercises
+      buildApp()/the CORS middleware path). WEB_ORIGIN unset = identical to the
+      prior `cors()` so the other 7 harnesses are unaffected by this change.
+      Boot smoke: PORT=4024 + WEB_ORIGIN="https://usemount-web.up.railway.app,
+      http://localhost:3000" + worker/reconciler disabled → `usemount.dev API
+      running on port 4024`; `GET /health` → 200 `{"ok":true}` with
+      `access-control-allow-origin: http://localhost:3000` (locked origin
+      echoed correctly); clean SIGTERM.
+      Brand-WIP files untouched.
+
+      NOT exercised (the whole point of the next session): the real Railway
+      deploy, the GitHub App install on REV Plugin, and the end-to-end connect→
+      build→preview against a live repo. DEPLOY.md is the runbook; first-deploy
+      failure modes are pre-empted in its Troubleshooting section but only
+      proven once the owner runs it.
+    </verification>
+
+    <known-risks>
+      Carry-forward (PR3–PR12): unchanged — R1, R7 (now in-progress), R9
+      (CORS now env-lockable via WEB_ORIGIN; GitHub App URLs still set by the
+      owner at deploy), PR9/PR10/PR11/PR12 polish items all open.
+
+      PR13-introduced / sharpened (all live in DEPLOY.md Troubleshooting):
+      - Build worker unproven in a container — package-manager availability
+        (corepack), NODE_MODULES_CACHE writability, build memory/time. First
+        real deploy will surface the truth; capture fixes back into DEPLOY.md +
+        the migration-log.
+      - WEB_ORIGIN must actually be SET post-deploy or the API stays permissive
+        (functional, but not the R9 lockdown). Runbook calls this out.
+
+      Pre-existing, not yours to fix: same set as PR12.
+    </known-risks>
+
+    <next>
+      **PR14 = live R7/R9 deploy cutover (owner+agent loop) + controls-schema
+      override polish.** The live deploy follows DEPLOY.md: deploy → hit
+      /health → wire URLs → configure the two GitHub apps + Supabase redirects →
+      install App A on REV Plugin → connect + test. Expect 2–3 iterations;
+      record every real failure + fix into DEPLOY.md and a `<pr id="14">` entry.
+      Polish candidates unchanged from PR12 `<next>` (controls-schema override
+      lead, per-component build-error inline, naming consistency, PR9/10/11
+      known-risks). True go-live (a `main` deploy + custom domain usemount.dev)
+      stays a separate owner decision once the staging test is green.
+
+      No PAT taken this session.
+    </next>
+  </pr>
 </migration-log>
