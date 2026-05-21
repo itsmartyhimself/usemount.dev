@@ -35,6 +35,7 @@ import { supabaseAdmin } from "../supabase/admin.js"
 
 import { bundleComponent, bundleGlobalsCss, bundleProviders } from "./bundle.js"
 import { shallowClone } from "./clone.js"
+import { resolveComponentPresets } from "./component-presets.js"
 import { installDeps } from "./deps.js"
 import {
   classifyGap,
@@ -53,8 +54,10 @@ const HEARTBEAT_MS = 2 * 60 * 1000 // 2 min (10-min reclaim window in 0003)
 const NODE_MODULES_CACHE =
   process.env.NODE_MODULES_CACHE ?? "/var/lib/usemount/node-modules-cache"
 
+// `usemount` skips the Step 5.5 sibling override files (`Button.usemount.tsx`)
+// so they're never treated as buildable component entries.
 const COMPONENT_SKIP =
-  /\.(manifest|config|test|spec|stories|d)\.(tsx?|ts)$|(^|\/)index\.tsx?$/
+  /\.(manifest|config|test|spec|stories|usemount|d)\.(tsx?|ts)$|(^|\/)index\.tsx?$/
 
 interface WorkerHandle {
   workerId: string
@@ -301,6 +304,13 @@ async function processJob(
         const checker = introspectComponent(project, entry)
         const { controls, propsSchema } = deriveControls(checker.props)
         const gap = classifyGap(checker, controls, src)
+        // Step 5.5 — sibling `<Component>.usemount.tsx` named presets, parsed
+        // literal-only (never evaluated). Non-fatal by construction: a broken
+        // override yields {} presets + hints, never a failed component.
+        const { presets, hints: presetHints } = resolveComponentPresets(entry)
+        for (const h of presetHints) {
+          console.log(`[worker:${workerId}] presets hint (${slug}): ${h}`)
+        }
         const bundle = await bundleComponent({
           entry,
           workDir: cloneResult.workDir,
@@ -327,7 +337,7 @@ async function processJob(
           kind: "component",
           controls,
           propsSchema,
-          states: {},
+          states: presets,
           artifactUrl,
           sourceHash,
           introspectionGap: gap,

@@ -1,3 +1,4 @@
+import type { BuildManifestKind } from "@usemount/shared"
 import type { CarbonIconName } from "@/lib/icons/registry"
 
 export type SectionId = "library" | "frontend" | "projects" | "design-system"
@@ -32,6 +33,10 @@ export interface LeafRecord {
   order: number
   loading?: boolean
   disabled?: boolean
+  // Build classification (Step 5.6). Drives the greyed-leaf disposition note:
+  // `maybe-rsc` → "Server component — not supported"; `unsupported` → build
+  // failure. Absent/`component` → a normal previewable leaf.
+  manifestKind?: BuildManifestKind
 }
 
 export type TopPageId = "getting-started" | "changelog"

@@ -520,7 +520,7 @@ function TypeBadge({ text }: { text: string }) {
 }
 
 export function PropertiesPanel() {
-  const { manifest, props, setProp, reset } = useCanvasControls()
+  const { manifest, props, setProp, applyPreset, reset } = useCanvasControls()
   const [open, setOpen] = useState(false)
 
   if (!manifest) return null
@@ -528,6 +528,12 @@ export function PropertiesPanel() {
   const { controls } = manifest
   const stateLines = Object.entries(props).map(
     ([key, val]) => `${key}: ${JSON.stringify(val)}`,
+  )
+  // Step 5.5 — named presets from a `<Component>.usemount.tsx` override file
+  // (manifest.states). Each value is a props object applied as a clean scenario.
+  const presetEntries = Object.entries(manifest.states).filter(
+    (e): e is [string, Record<string, unknown>] =>
+      !!e[1] && typeof e[1] === "object" && !Array.isArray(e[1]),
   )
 
   return (
@@ -566,6 +572,42 @@ export function PropertiesPanel() {
               </button>
             </div>
             <div style={dividerStyle} />
+
+            {presetEntries.length > 0 && (
+              <>
+                <Section title="Presets">
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: FORM_CHIP_GAP,
+                    }}
+                  >
+                    {presetEntries.map(([name, values]) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => applyPreset(values)}
+                        style={{
+                          height: FORM_CHIP_HEIGHT,
+                          padding: `0 ${FORM_CHIP_PAD_X}px`,
+                          borderRadius: FORM_CHIP_RADIUS,
+                          background: COLOR_INACTIVE_BG,
+                          color: COLOR_INACTIVE_FG,
+                          fontSize: FORM_CHIP_FONT,
+                          border: "none",
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </Section>
+                <div style={dividerStyle} />
+              </>
+            )}
 
             {(controls.variants || controls.sizes) && (
               <>
