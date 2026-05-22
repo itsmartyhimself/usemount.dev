@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
+import { publicOrigin } from "@/lib/http/public-origin"
 
 // GitHub App post-install Setup URL target. GitHub redirects the browser here
 // with ?installation_id=&setup_action=&state=. This handler only sanitises and
@@ -10,7 +11,10 @@ import { NextResponse, type NextRequest } from "next/server"
 // Setup URL is not yet registered on the GitHub App (R9, deferred to the
 // custom-domain coordinated pass) — value: <web-origin>/connect/callback.
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url)
+  const { searchParams } = new URL(request.url)
+  // PUBLIC origin (not request.url's origin, which is Railway's internal
+  // localhost:8080 — the source of the post-install localhost:8080 redirect).
+  const origin = publicOrigin(request)
   const installationId = searchParams.get("installation_id")
   const setupAction = searchParams.get("setup_action")
   const state = searchParams.get("state") ?? ""
