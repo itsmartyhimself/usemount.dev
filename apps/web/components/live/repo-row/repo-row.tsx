@@ -22,10 +22,16 @@ import { WorkspaceChip } from "@/components/live/workspace-chip"
 import { ROW_SPRING } from "@/components/live/row/row.config"
 import { formatRelativeTimeShort } from "@/lib/time/relative"
 import { workspaceForRepo } from "@/lib/dashboard/demo"
-import type { RepoConnection, RepoStatus } from "@/lib/dashboard/types"
+import type { RepoConnection, RepoStatus, Workspace } from "@/lib/dashboard/types"
 
 interface RepoRowProps {
   repo: RepoConnection
+  // Real owning workspace, resolved by the dashboard caller from state. Drives
+  // the "open repo" link's workspace segment + the WorkspaceChip. Optional: the
+  // passive search-modal rows (no nav, chip only) render outside the dashboard
+  // state provider and fall back to the demo lookup below. Once the demo module
+  // is retired, the search modals should resolve + pass this too.
+  workspace?: Workspace
   expanded: boolean
   // When another row in the list is the active surface (its parent repo is
   // open, or the OtherBranchesExpander inside it is open), this row recedes
@@ -65,6 +71,7 @@ type RepoRowComponentProps = RepoRowProps &
 function RepoRowBase(
   {
     repo,
+    workspace: workspaceProp,
     expanded,
     dimmed = false,
     pinned = false,
@@ -81,7 +88,9 @@ function RepoRowBase(
   ref: Ref<HTMLDivElement>,
 ) {
   const router = useRouter()
-  const workspace = workspaceForRepo(repo.id)
+  // Prefer the real workspace passed by the dashboard; fall back to the demo
+  // lookup for callers that don't provide one (passive search-modal rows).
+  const workspace = workspaceProp ?? workspaceForRepo(repo.id)
   const primaryBranch =
     repo.branches.find((b) => b.primary)?.name ?? repo.branches[0]?.name ?? "main"
 

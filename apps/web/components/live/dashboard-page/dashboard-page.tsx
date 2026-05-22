@@ -23,7 +23,7 @@ import {
   DashboardStateProvider,
 } from "@/lib/dashboard/state"
 import { synthesizeUnpinnedBranches } from "@/lib/dashboard/demo"
-import type { Branch } from "@/lib/dashboard/types"
+import type { Branch, Workspace } from "@/lib/dashboard/types"
 
 // EmptyState is now data-derived (no ?state= URL contract). It must be decided
 // inside the provider so it can read loading/repos. `loading` gates the
@@ -60,6 +60,7 @@ const expandedContentStyle: CSSProperties = {
 
 function DashboardContent() {
   const {
+    workspaces,
     filteredRepos,
     expandedRepoId,
     expandedExpanderIds,
@@ -89,6 +90,11 @@ function DashboardContent() {
       <ListContainer>
         {filteredRepos.map((repo) => {
           const expanded = expandedRepoId === repo.id
+          // Real owning workspace + repo NAME for routing (replaces demo
+          // workspaceForRepo / DEMO_REPOS lookup). Both come from the same
+          // RLS-scoped state fetch, so a connected repo always resolves.
+          const workspace = workspaces.find((w) => w.id === repo.workspaceId)
+          const repoName = repo.orgRepo.split("/")[1]
           const pinnedBranches = repo.branches.filter((b) => b.pinned)
           const unpinnedCount = Math.max(
             0,
@@ -112,6 +118,7 @@ function DashboardContent() {
               <Collapsible.Trigger asChild>
                 <RepoRow
                   repo={repo}
+                  workspace={workspace}
                   expanded={expanded}
                   dimmed={dimmed}
                   onToggleExpanded={toggleExpanded}
@@ -129,7 +136,13 @@ function DashboardContent() {
                       style={{ overflow: "hidden" }}
                     >
                       <div style={expandedContentStyle}>
-                        <BranchHoverStack branches={pinnedBranches} />
+                        {workspace ? (
+                          <BranchHoverStack
+                            branches={pinnedBranches}
+                            workspace={workspace}
+                            repoName={repoName}
+                          />
+                        ) : null}
                         {unpinnedCount > 0 ? (
                           <OtherBranchesExpander
                             totalUnpinned={unpinnedCount}
@@ -146,7 +159,7 @@ function DashboardContent() {
                           onOpenChange={() => undefined}
                         >
                           <AnimatePresence initial={false}>
-                            {expanderOpen ? (
+                            {expanderOpen && workspace ? (
                               <Collapsible.Content forceMount asChild>
                                 <motion.div
                                   key={`${repo.id}-unpinned`}
@@ -158,6 +171,8 @@ function DashboardContent() {
                                 >
                                   <BranchHoverStack
                                     branches={synthesizeUnpinnedBranches(repo, unpinnedCount)}
+                                    workspace={workspace}
+                                    repoName={repoName}
                                   />
                                 </motion.div>
                               </Collapsible.Content>
@@ -179,6 +194,10 @@ function DashboardContent() {
 
 interface BranchHoverStackProps {
   branches: Branch[]
+  // Threaded to each BranchRow so its instance link uses the real workspace +
+  // repo NAME (not the repo UUID). All branches in one stack share a parent repo.
+  workspace: Workspace
+  repoName: string
 }
 
 interface PillBounds {
@@ -188,7 +207,7 @@ interface PillBounds {
 
 // Shared hover pill that travels between rows — mirrors SidebarHighlightLayer.
 // Used by both pinned branches and the OtherBranchesExpander reveal.
-function BranchHoverStack({ branches }: BranchHoverStackProps) {
+function BranchHoverStack({ branches, workspace, repoName }: BranchHoverStackProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const refs = useRef<Map<string, HTMLElement>>(new Map())
   const [hoveredId, setHoveredId] = useState<string | null>(null)
@@ -264,6 +283,8 @@ function BranchHoverStack({ branches }: BranchHoverStackProps) {
         <BranchRow
           key={branch.id}
           branch={branch}
+          workspace={workspace}
+          repoName={repoName}
           noHoverBackground
           onHoverChange={(h) => handleHoverChange(branch.id, h)}
           ref={(el) => registerRef(branch.id, el)}

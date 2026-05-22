@@ -10,11 +10,17 @@ import { Pin, PinFilled, Renew } from "@carbon/icons-react"
 import { IconButton } from "@/components/live/icon-button"
 import { StatusDot } from "@/components/live/status-dot"
 import { formatRelativeTimeShort } from "@/lib/time/relative"
-import { DEMO_REPOS, workspaceForRepo } from "@/lib/dashboard/demo"
-import type { Branch, RepoStatus } from "@/lib/dashboard/types"
+import type { Branch, RepoStatus, Workspace } from "@/lib/dashboard/types"
 
 interface BranchRowProps {
   branch: Branch
+  // Owning workspace + repo NAME, resolved from real state by the parent. The
+  // instance route resolves a repo by its NAME (org_repo.split("/")[1]) and the
+  // workspace by name — so these MUST be the real values, never the repo UUID.
+  // (Previously derived here via demo data, which fell back to branch.repoId —
+  // a UUID — and produced an unresolvable /workspace/<uuid>/branch link.)
+  workspace: Workspace
+  repoName: string
   // When true, the row's bg never changes on hover. The trailing icon cluster
   // still appears on hover. Used by the OtherBranchesExpander reveal so a
   // single traveling pill carries the hover affordance instead of each row
@@ -34,13 +40,9 @@ const DOT_BY_STATUS: Record<
 }
 
 function BranchRowBase(
-  { branch, noHoverBackground = false, onHoverChange }: BranchRowProps,
+  { branch, workspace, repoName, noHoverBackground = false, onHoverChange }: BranchRowProps,
   ref: Ref<HTMLDivElement>,
 ) {
-  const workspace = workspaceForRepo(branch.repoId)
-  const parentRepo = DEMO_REPOS.find((r) => r.id === branch.repoId)
-  const repoName = parentRepo?.orgRepo.split("/")[1] ?? branch.repoId
-
   const dot = DOT_BY_STATUS[branch.status]
   const isStale = branch.status === "stale"
   const isFailed = branch.status === "failed"
