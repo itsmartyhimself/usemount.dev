@@ -42,7 +42,7 @@ import {
   deriveControls,
   introspectComponent,
 } from "./introspect.js"
-import { completeJob, failJob, heartbeat, leaseNextJob } from "./lease.js"
+import { completeJob, failJob, heartbeat, leaseNextJob, recordJobWarning } from "./lease.js"
 import { syncManifests } from "./manifests.js"
 import { parseMountConfig } from "./mount-config.js"
 import { PROVIDERS_AUTO_FILENAME, resolveProvidersSource } from "./providers.js"
@@ -241,6 +241,13 @@ async function processJob(
     )
     if (isStolen()) return
 
+    // Non-fatal build warnings (providers / globals.css bundling) accumulate
+    // here and are written ONCE to build_jobs.error before the success update,
+    // so a succeeded build still surfaces what degraded (rather than the old
+    // console.warn-and-swallow). Prefixed by source so a single column is
+    // readable when both fail.
+    const buildWarnings: string[] = []
+
     // Step 5.3 + 5.4 — resolve and bundle the providers layer once per build.
     // canvas.providers.tsx (customer override) wins; otherwise auto-detect from
     // app/layout.tsx. Origin "none" means bare render (PR7 behavior, no
@@ -275,9 +282,11 @@ async function processJob(
           }
         }
       } catch (e) {
+        const msg = (e as Error).message
         console.warn(
-          `[worker:${workerId}] providers bundling failed: ${(e as Error).message} (continuing with bare render)`,
+          `[worker:${workerId}] providers bundling failed: ${msg} (continuing with bare render)`,
         )
+        buildWarnings.push(`providers: ${msg}`)
       }
     } else {
       console.log(
@@ -379,7 +388,6 @@ async function processJob(
         const bytes = await bundleGlobalsCss({
           globalsCssPath: mount.resolvedGlobalsCss,
           workDir: cloneResult.workDir,
-          tsconfigPath,
         })
         await uploadCss({
           instanceId: instance.id,
@@ -388,12 +396,24 @@ async function processJob(
           bytes,
         })
       } catch (e) {
+        const msg = (e as Error).message
         console.warn(
-          `[worker:${workerId}] globals.css bundling failed: ${(e as Error).message} (continuing)`,
+          `[worker:${workerId}] globals.css bundling failed: ${msg} (continuing)`,
         )
+        buildWarnings.push(`globals.css: ${msg}`)
       }
     }
     if (isStolen()) return
+
+    // Surface any non-fatal degradations on the (succeeded) job. Non-fatal: a
+    // write failure here must not fail an otherwise-good build.
+    if (buildWarnings.length > 0) {
+      await recordJobWarning(job.id, buildWarnings.join("\n")).catch((e) =>
+        console.warn(
+          `[worker:${workerId}] recordJobWarning failed: ${(e as Error).message}`,
+        ),
+      )
+    }
 
     const syncResult = await syncManifests({
       instanceId: instance.id,

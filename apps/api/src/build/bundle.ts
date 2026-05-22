@@ -15,6 +15,16 @@
 // dashboard-build-plan Step 4 confirmed).
 
 import { build } from "esbuild"
+import { createRequire } from "node:module"
+import { readFileSync } from "node:fs"
+import path from "node:path"
+
+// CJS/ESM interop for packages resolved out of the customer's clone via
+// createRequire — `require` may hand back the function directly or a { default }
+// wrapper depending on how the package was authored.
+function interopDefault<T>(mod: T): T {
+  return (mod as { default?: T }).default ?? mod
+}
 
 export interface BundleResult {
   jsBytes: Uint8Array
@@ -83,22 +93,46 @@ export async function bundleProviders(opts: {
   return jsFile.contents
 }
 
+/**
+ * Compile the customer's globals.css with their installed Tailwind v4 engine.
+ *
+ * esbuild's `.css` loader does NOT run Tailwind — it can't resolve
+ * `@import "tailwindcss"` (throws `Could not resolve "tailwindcss"`) and emits
+ * nothing usable, so every component rendered unstyled. Instead we run the
+ * customer's own `@tailwindcss/postcss` through postcss, both resolved from the
+ * CLONE's node_modules (installDeps already ran), so the engine version matches
+ * their lockfile and their `@theme`/content config is honoured.
+ *
+ * The customer's `postcss.config.*` is intentionally bypassed: only
+ * `@tailwindcss/postcss` runs (autoprefixer and other plugins are skipped).
+ * Tailwind v4 is self-sufficient for the v1 support matrix; honouring the full
+ * postcss chain is a follow-up.
+ *
+ * Two paths are anchored to the clone, NOT process.cwd (the worker process runs
+ * outside the clone): `base` tells Tailwind v4 which directory to scan for class
+ * candidates (it DEFAULTS to process.cwd — leaving it unset makes the worker
+ * scan the wrong tree, bloating or mis-scoping the output), and `from` is the
+ * absolute globals.css path for `@import`/`@source` resolution. Verified
+ * cwd-independent: same byte-for-byte output whether cwd is the clone or not.
+ *
+ * Output is NOT minified (parity with the PR16-proven recipe); `optimize` would
+ * pull in lightningcss's native binary — a follow-up once the worker runs live.
+ */
 export async function bundleGlobalsCss(opts: {
   globalsCssPath: string
   workDir: string
-  tsconfigPath: string
 }): Promise<Uint8Array> {
-  const out = await build({
-    entryPoints: [opts.globalsCssPath],
-    bundle: true,
-    write: false,
-    tsconfig: opts.tsconfigPath,
-    absWorkingDir: opts.workDir,
-    logLevel: "silent",
-    minify: true,
-    loader: { ".css": "css" },
+  const requireFromClone = createRequire(path.join(opts.workDir, "noop.js"))
+  const postcss = interopDefault(requireFromClone("postcss")) as (
+    plugins: unknown[],
+  ) => { process: (css: string, o: { from: string; to: string }) => PromiseLike<{ css: string }> }
+  const tailwindcss = interopDefault(requireFromClone("@tailwindcss/postcss")) as (
+    opts?: { base?: string },
+  ) => unknown
+  const src = readFileSync(opts.globalsCssPath, "utf8")
+  const result = await postcss([tailwindcss({ base: opts.workDir })]).process(src, {
+    from: opts.globalsCssPath,
+    to: opts.globalsCssPath,
   })
-  const cssFile = out.outputFiles.find((f) => f.path.endsWith(".css"))
-  if (!cssFile) throw new Error("esbuild produced no CSS output for globals.css")
-  return cssFile.contents
+  return Buffer.from(result.css)
 }

@@ -69,3 +69,21 @@ export async function failJob(
     .eq("id", jobId)
   if (error) throw new Error(`failJob: ${error.message}`)
 }
+
+/**
+ * Record NON-FATAL build warnings on the job's `error` column WITHOUT changing
+ * status. The build still completes (completeJob sets status='succeeded' and
+ * does not touch `error`), so this surfaces a "succeeded-with-warnings" job —
+ * e.g. the globals.css or providers bundle failed but components still built.
+ * Today no web UI reads build_jobs.error to derive status (repo/instance status
+ * comes from instances.build_status), so a populated error on a succeeded job
+ * is safe; if a build-log surface is added later it should treat a succeeded
+ * job's `error` as warnings, not a failure. Truncated like failJob.
+ */
+export async function recordJobWarning(jobId: string, text: string): Promise<void> {
+  const { error } = await supabaseAdmin()
+    .from("build_jobs")
+    .update({ error: text.slice(0, 4000) })
+    .eq("id", jobId)
+  if (error) throw new Error(`recordJobWarning: ${error.message}`)
+}
