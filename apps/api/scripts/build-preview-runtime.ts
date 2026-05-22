@@ -22,6 +22,7 @@
 
 import { build } from "esbuild"
 import { mkdirSync, writeFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -29,6 +30,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // scripts/ → ../ = apps/api → ../../ = repo root → web = apps/web
 const WEB_ROOT = path.resolve(__dirname, "../../web")
 const OUT_DIR = path.join(WEB_ROOT, "public/preview-runtime")
+
+// React/React-DOM live in apps/web's node_modules (direct deps there). Resolve
+// from WEB_ROOT so we can read each module's real named-export set at build
+// time (see buildOne) — keeps the shim in sync across React bumps.
+const webRequire = createRequire(path.join(WEB_ROOT, "noop.js"))
+const VALID_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 
 interface Target {
   name: string
@@ -43,15 +50,41 @@ const TARGETS: Target[] = [
 ]
 
 async function buildOne(t: Target): Promise<{ name: string; size: number }> {
+  // esbuild bundling a bare CJS entry (`react`, `react-dom/client`, …) with
+  // `format: "esm"` emits ONLY `export default <module.exports>` — it does NOT
+  // synthesize named exports from CommonJS. But every consumer imports NAMED
+  // bindings: the iframe bootstrap (`import { createRoot } from
+  // "react-dom/client"`; `import * as React` then `React.createElement`) and
+  // each customer bundle's automatic JSX (`import { jsx } from
+  // "react/jsx-runtime"`, externalized in bundle.ts). A default-only module
+  // makes all of those link-fail ("does not provide an export named
+  // 'createRoot'") → React never loads → blank canvas. So we bundle a shim that
+  // statically re-exports each real named binding. The names are read from the
+  // installed module so the shim can't drift when React is bumped.
+  const mod = webRequire(t.entryPoint) as Record<string, unknown>
+  const names = Object.keys(mod).filter(
+    (k) => k !== "default" && VALID_IDENT.test(k),
+  )
+  const shim = [
+    `import __m from ${JSON.stringify(t.entryPoint)}`,
+    `export default __m`,
+    ...names.map((n) => `export const ${n} = __m[${JSON.stringify(n)}]`),
+  ].join("\n")
+
   const out = await build({
-    entryPoints: [t.entryPoint],
+    stdin: {
+      contents: shim,
+      // Resolve `import __m from "<entry>"` against apps/web's node_modules.
+      resolveDir: WEB_ROOT,
+      sourcefile: `${t.name}.shim.js`,
+      loader: "js",
+    },
     bundle: true,
     write: false,
     format: "esm",
     platform: "browser",
     minify: true,
     target: ["es2022"],
-    // Resolve from apps/web — that's where React/React-DOM are direct deps.
     absWorkingDir: WEB_ROOT,
     logLevel: "silent",
     // The iframe is a production environment; force the production React
