@@ -16,8 +16,10 @@
 // connect-src for chain-loads) and adds an external uptime dep — self-hosting
 // keeps the iframe CSP at `script-src 'self' <storage-host>`.
 //
-// Idempotent: run via `pnpm --filter @usemount/api build:preview-runtime`.
-// Output files are checked into the repo (small, ~150KB total minified).
+// Output: ONE bundle `react-runtime.mjs` (holds a single shared React) plus
+// four thin `export *` stubs (react.mjs, react-dom.mjs, react-dom-client.mjs,
+// react-jsx-runtime.mjs) the importmap points at. All five are checked into the
+// repo. Idempotent: run via `pnpm --filter @usemount/api build:preview-runtime`.
 // Re-run when bumping React.
 
 import { build } from "esbuild"
@@ -33,71 +35,68 @@ const OUT_DIR = path.join(WEB_ROOT, "public/preview-runtime")
 
 // React/React-DOM live in apps/web's node_modules (direct deps there). Resolve
 // from WEB_ROOT so we can read each module's real named-export set at build
-// time (see buildOne) — keeps the shim in sync across React bumps.
+// time (see buildRuntimeShim) — keeps the re-exports in sync across React bumps.
 const webRequire = createRequire(path.join(WEB_ROOT, "noop.js"))
 const VALID_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 
-interface Target {
-  name: string
-  entryPoint: string
-}
-
-const TARGETS: Target[] = [
-  { name: "react.mjs", entryPoint: "react" },
-  { name: "react-dom.mjs", entryPoint: "react-dom" },
-  { name: "react-dom-client.mjs", entryPoint: "react-dom/client" },
-  { name: "react-jsx-runtime.mjs", entryPoint: "react/jsx-runtime" },
+// The four CommonJS packages the iframe importmap exposes, in dedupe-priority
+// order: the first source to define a name wins (Fragment/version → react,
+// createRoot/hydrateRoot → react-dom/client, jsx/jsxs → react/jsx-runtime).
+const RUNTIME_SOURCES: { local: string; spec: string }[] = [
+  { local: "__react", spec: "react" },
+  { local: "__reactDom", spec: "react-dom" },
+  { local: "__reactDomClient", spec: "react-dom/client" },
+  { local: "__jsxRuntime", spec: "react/jsx-runtime" },
 ]
 
-async function buildOne(t: Target): Promise<{ name: string; size: number }> {
-  // esbuild bundling a bare CJS entry (`react`, `react-dom/client`, …) with
-  // `format: "esm"` emits ONLY `export default <module.exports>` — it does NOT
-  // synthesize named exports from CommonJS. But every consumer imports NAMED
-  // bindings: the iframe bootstrap (`import { createRoot } from
-  // "react-dom/client"`; `import * as React` then `React.createElement`) and
-  // each customer bundle's automatic JSX (`import { jsx } from
-  // "react/jsx-runtime"`, externalized in bundle.ts). A default-only module
-  // makes all of those link-fail ("does not provide an export named
-  // 'createRoot'") → React never loads → blank canvas. So we bundle a shim that
-  // statically re-exports each real named binding. The names are read from the
-  // installed module so the shim can't drift when React is bumped.
-  const mod = webRequire(t.entryPoint) as Record<string, unknown>
-  const names = Object.keys(mod).filter(
-    (k) => k !== "default" && VALID_IDENT.test(k),
-  )
-  const shim = [
-    `import __m from ${JSON.stringify(t.entryPoint)}`,
-    `export default __m`,
-    ...names.map((n) => `export const ${n} = __m[${JSON.stringify(n)}]`),
-  ].join("\n")
+// The single bundle that holds ONE React. The importmap-facing files below are
+// thin static re-exports of it. NOTE: a component importing `react` transitively
+// loads this whole ~190KB file — that is INTENTIONAL, not waste. The iframe needs
+// the reconciler to render anything, so the bytes are consolidated into one cached
+// file (exactly how a normal app bundles react + react-dom deduped). Do NOT split
+// it apart to "save bytes" on the react.mjs entry — that reintroduces the
+// multiple-React dispatcher bug ("Cannot read properties of null (useContext)").
+const RUNTIME_FILE = "react-runtime.mjs"
 
-  const out = await build({
-    stdin: {
-      contents: shim,
-      // Resolve `import __m from "<entry>"` against apps/web's node_modules.
-      resolveDir: WEB_ROOT,
-      sourcefile: `${t.name}.shim.js`,
-      loader: "js",
-    },
-    bundle: true,
-    write: false,
-    format: "esm",
-    platform: "browser",
-    minify: true,
-    target: ["es2022"],
-    absWorkingDir: WEB_ROOT,
-    logLevel: "silent",
-    // The iframe is a production environment; force the production React
-    // build (no dev warnings panel). The host devtools still surface
-    // postMessage `error` payloads.
-    define: { "process.env.NODE_ENV": '"production"' },
-    external: [],
-  })
-  const file = out.outputFiles[0]
-  if (!file) throw new Error(`no output for ${t.entryPoint}`)
-  const outPath = path.join(OUT_DIR, t.name)
-  writeFileSync(outPath, file.contents)
-  return { name: t.name, size: file.contents.byteLength }
+// Importmap entry files. Each re-exports the one runtime, so react /
+// react-dom / react-dom/client / react/jsx-runtime resolve to the SAME React
+// instance — the invariant that makes hooks work (see buildRuntimeShim).
+const ENTRY_FILES = [
+  "react.mjs",
+  "react-dom.mjs",
+  "react-dom-client.mjs",
+  "react-jsx-runtime.mjs",
+]
+
+// Source for the combined runtime: import all four CJS packages (esbuild's
+// `import x from "<cjs>"` gives x = module.exports) and statically re-export
+// every unique named binding. Why ONE bundle instead of four:
+//
+//   esbuild can't synthesize named exports from a CJS entry (you get only
+//   `export default`), so each consumer's NAMED import (the bootstrap's
+//   `import { createRoot }`, `import * as React` → React.createElement; the
+//   customer bundle's automatic `import { jsx }`) needs an explicit re-export.
+//   AND every preview module must share ONE React: react-dom sets React's hook
+//   dispatcher on its React; a second copy → hooks read a null dispatcher
+//   ("Cannot read properties of null (reading 'useContext')"). Bundling all
+//   four together makes esbuild dedupe React to a single instance. Splitting
+//   React back out with `external` does NOT work — esbuild leaves a dynamic
+//   `require("react")` inside React's CJS wrapper that throws in browser ESM.
+function buildRuntimeShim(): string {
+  const seen = new Set<string>(["default"])
+  const importLines = RUNTIME_SOURCES.map(
+    ({ local, spec }) => `import ${local} from ${JSON.stringify(spec)}`,
+  )
+  const exportLines: string[] = []
+  for (const { local, spec } of RUNTIME_SOURCES) {
+    const mod = webRequire(spec) as Record<string, unknown>
+    for (const name of Object.keys(mod)) {
+      if (seen.has(name) || !VALID_IDENT.test(name)) continue
+      seen.add(name)
+      exportLines.push(`export const ${name} = ${local}[${JSON.stringify(name)}]`)
+    }
+  }
+  return [...importLines, ...exportLines].join("\n")
 }
 
 function formatBytes(n: number): string {
@@ -109,15 +108,46 @@ function formatBytes(n: number): string {
 async function main(): Promise<void> {
   mkdirSync(OUT_DIR, { recursive: true })
   const t0 = Date.now()
-  const results = await Promise.all(TARGETS.map(buildOne))
-  const totalMs = Date.now() - t0
-  const totalBytes = results.reduce((a, r) => a + r.size, 0)
-  for (const r of results) {
-    console.log(`  ${r.name.padEnd(28)} ${formatBytes(r.size).padStart(10)}`)
-  }
+
+  // 1. Build the single shared runtime — one React, all named exports.
+  const out = await build({
+    stdin: {
+      contents: buildRuntimeShim(),
+      // Resolve the four bare imports against apps/web's node_modules.
+      resolveDir: WEB_ROOT,
+      sourcefile: "react-runtime.shim.js",
+      loader: "js",
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "browser",
+    minify: true,
+    target: ["es2022"],
+    absWorkingDir: WEB_ROOT,
+    logLevel: "silent",
+    // Production React build (no dev warning machinery); host devtools still
+    // surface postMessage `error` payloads.
+    define: { "process.env.NODE_ENV": '"production"' },
+    external: [],
+  })
+  const file = out.outputFiles[0]
+  if (!file) throw new Error("esbuild produced no output for the runtime shim")
+  writeFileSync(path.join(OUT_DIR, RUNTIME_FILE), file.contents)
   console.log(
-    `\nbuilt ${results.length} files (${formatBytes(totalBytes)}) in ${totalMs}ms`,
+    `  ${RUNTIME_FILE.padEnd(28)} ${formatBytes(file.contents.byteLength).padStart(10)}`,
   )
+
+  // 2. Write the thin importmap entries — `export *` is a STATIC re-export, so
+  //    named imports (`{ createRoot }`, `{ jsx }`) resolve through to the
+  //    runtime, and all four specifiers share its single React.
+  const reExport = `export * from "./${RUNTIME_FILE}"\n`
+  for (const name of ENTRY_FILES) {
+    writeFileSync(path.join(OUT_DIR, name), reExport)
+    console.log(`  ${name.padEnd(28)} ${formatBytes(reExport.length).padStart(10)} (re-export)`)
+  }
+
+  console.log(`\nbuilt ${ENTRY_FILES.length + 1} files in ${Date.now() - t0}ms`)
 }
 
 main().catch((e) => {

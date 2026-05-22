@@ -127,10 +127,17 @@ function isHostMessage(m) {
   return m.props && typeof m.props === "object"
 }
 
+function isComponent(v) {
+  // Plain function components, plus exotic ones — forwardRef/memo return an
+  // OBJECT carrying a $$typeof tag, not a function, so a function-only check
+  // wrongly rejects them ("bundle did not export a PascalCase function").
+  return typeof v === "function" || (!!v && typeof v === "object" && "$$typeof" in v)
+}
+
 function pickComponent(mod) {
-  if (mod && typeof mod.default === "function") return mod.default
+  if (mod && isComponent(mod.default)) return mod.default
   for (const [k, v] of Object.entries(mod || {})) {
-    if (typeof v === "function" && /^[A-Z]/.test(k)) return v
+    if (/^[A-Z]/.test(k) && isComponent(v)) return v
   }
   return null
 }
