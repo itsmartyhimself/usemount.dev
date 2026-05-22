@@ -15,6 +15,7 @@ import {
   useCallback,
   useLayoutEffect,
   useRef,
+  useState,
   type CSSProperties,
 } from "react"
 import type { IframeBbox } from "@usemount/shared"
@@ -106,6 +107,10 @@ export function StageContent({ selected }: StageContentProps) {
   const { setContentBbox, updateContentBboxBounds } = useCanvasView()
   const { manifest, props } = useCanvasControls()
   const fittedForIdRef = useRef<string | null>(null)
+  // Error the preview iframe reported (module-load failure or render throw).
+  // Surfaced on the canvas as a tile instead of being swallowed — the iframe
+  // stays 1×1 on failure, so without this the canvas is just silently blank.
+  const [iframeError, setIframeError] = useState<string | null>(null)
 
   const hasManifest = !!manifest
   const renderableManifest =
@@ -113,10 +118,17 @@ export function StageContent({ selected }: StageContentProps) {
       ? manifest
       : null
 
-  // Reset the fit-tracking when the selection changes.
+  // Reset the fit-tracking AND any prior error when the selection changes.
   useLayoutEffect(() => {
     fittedForIdRef.current = null
+    setIframeError(null)
   }, [renderableManifest?.id])
+
+  // A surfaced iframe error replaces the invisible 1×1 iframe with a readable
+  // tile — give the canvas a fixed bbox to fit it (no measure step).
+  useLayoutEffect(() => {
+    if (renderableManifest && iframeError) setContentBbox(FAILURE_TILE_SIZE)
+  }, [renderableManifest, iframeError, setContentBbox])
 
   // Mock path: deterministic bbox from the table; refit on selection change.
   useLayoutEffect(() => {
@@ -154,9 +166,38 @@ export function StageContent({ selected }: StageContentProps) {
     if (process.env.NODE_ENV !== "production") {
       console.warn("[iframe error]", message)
     }
+    setIframeError(message)
   }, [])
 
   if (renderableManifest) {
+    // The iframe reported an error (module load / render throw). It posted the
+    // message then stayed 1×1 (invisible), so show the message on the canvas.
+    if (iframeError) {
+      return (
+        <div style={failureTileStyle}>
+          <p
+            className="type-5 text-trim"
+            style={{ color: "var(--color-text-primary)" }}
+          >
+            Component failed to render
+          </p>
+          <p
+            className="font-mono type-2"
+            style={{
+              color: "var(--color-text-tertiary)",
+              textAlign: "center",
+              overflow: "auto",
+              maxHeight: 120,
+              maxWidth: "100%",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {iframeError}
+          </p>
+        </div>
+      )
+    }
     return (
       <div style={centerAnchorStyle}>
         <IframeMount
