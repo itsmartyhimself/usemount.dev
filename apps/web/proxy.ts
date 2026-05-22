@@ -75,6 +75,10 @@ function redirectKeepingSession(
 export const config = {
   matcher: [
     // Run on every path except Next internals and static assets.
-    "/((?!_next/static|_next/image|favicon.ico|SVGs/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    // `preview-runtime` is excluded like `_next/static`: the sandboxed preview
+    // iframe (opaque origin, no cookies) fetches the React runtime bundles from
+    // here, and running the auth gate would 307 them to /login. They're public
+    // static assets, CORS-enabled in next.config.ts.
+    "/((?!_next/static|_next/image|preview-runtime|favicon.ico|SVGs/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 }
