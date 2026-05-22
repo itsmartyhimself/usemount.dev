@@ -115,6 +115,12 @@ const root = createRoot(rootEl)
 let Component = null
 let Providers = null
 let mounted = false
+// Set once the component renders. After that, window-level error /
+// unhandledrejection events are NOT surfaced as render failures — they're
+// overwhelmingly ambient noise from browser extensions injected into the page
+// (e.g. MetaMask's inpage.js posting "Failed to connect to MetaMask"), not the
+// component's fault. Real mount errors are caught synchronously below.
+let renderedOk = false
 
 function postToHost(msg) {
   parent.postMessage(msg, "*")
@@ -158,6 +164,7 @@ function safeRender(props) {
     const tree = React.createElement(Component, props)
     const wrapped = Providers ? React.createElement(Providers, null, tree) : tree
     root.render(wrapped)
+    renderedOk = true
   } catch (e) {
     postToHost({ v: PROTOCOL_VERSION, kind: "error", message: String((e && e.message) || e) })
   }
@@ -186,9 +193,11 @@ const ro = new ResizeObserver(() => {
 ro.observe(rootEl)
 
 window.addEventListener("error", (event) => {
+  if (renderedOk) return
   postToHost({ v: PROTOCOL_VERSION, kind: "error", message: String(event.message || event.error || "uncaught error") })
 })
 window.addEventListener("unhandledrejection", (event) => {
+  if (renderedOk) return
   const reason = event.reason
   postToHost({ v: PROTOCOL_VERSION, kind: "error", message: String((reason && reason.message) || reason || "unhandled promise rejection") })
 })

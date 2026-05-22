@@ -42,11 +42,11 @@ const VALID_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 // The four CommonJS packages the iframe importmap exposes, in dedupe-priority
 // order: the first source to define a name wins (Fragment/version → react,
 // createRoot/hydrateRoot → react-dom/client, jsx/jsxs → react/jsx-runtime).
-const RUNTIME_SOURCES: { local: string; spec: string }[] = [
-  { local: "__react", spec: "react" },
-  { local: "__reactDom", spec: "react-dom" },
-  { local: "__reactDomClient", spec: "react-dom/client" },
-  { local: "__jsxRuntime", spec: "react/jsx-runtime" },
+const RUNTIME_SOURCES: { local: string; spec: string; ns: string }[] = [
+  { local: "__react", spec: "react", ns: "__ns_react" },
+  { local: "__reactDom", spec: "react-dom", ns: "__ns_reactDom" },
+  { local: "__reactDomClient", spec: "react-dom/client", ns: "__ns_reactDomClient" },
+  { local: "__jsxRuntime", spec: "react/jsx-runtime", ns: "__ns_jsxRuntime" },
 ]
 
 // The single bundle that holds ONE React. The importmap-facing files below are
@@ -60,12 +60,14 @@ const RUNTIME_FILE = "react-runtime.mjs"
 
 // Importmap entry files. Each re-exports the one runtime, so react /
 // react-dom / react-dom/client / react/jsx-runtime resolve to the SAME React
-// instance — the invariant that makes hooks work (see buildRuntimeShim).
-const ENTRY_FILES = [
-  "react.mjs",
-  "react-dom.mjs",
-  "react-dom-client.mjs",
-  "react-jsx-runtime.mjs",
+// instance — the invariant that makes hooks work (see buildRuntimeShim). `ns`
+// is the runtime export this entry re-exports as its `default` (for component
+// bundles that default-import, e.g. `import ReactDOM from "react-dom"`).
+const ENTRY_FILES: { name: string; ns: string }[] = [
+  { name: "react.mjs", ns: "__ns_react" },
+  { name: "react-dom.mjs", ns: "__ns_reactDom" },
+  { name: "react-dom-client.mjs", ns: "__ns_reactDomClient" },
+  { name: "react-jsx-runtime.mjs", ns: "__ns_jsxRuntime" },
 ]
 
 // Source for the combined runtime: import all four CJS packages (esbuild's
@@ -95,6 +97,12 @@ function buildRuntimeShim(): string {
       seen.add(name)
       exportLines.push(`export const ${name} = ${local}[${JSON.stringify(name)}]`)
     }
+  }
+  // Per-package namespace objects (the CJS module.exports), re-exported as each
+  // entry's `default` below — covers component bundles that do `import React
+  // from "react"` / `import ReactDOM from "react-dom"`, which `export *` omits.
+  for (const { local, ns } of RUNTIME_SOURCES) {
+    exportLines.push(`export const ${ns} = ${local}`)
   }
   return [...importLines, ...exportLines].join("\n")
 }
@@ -138,13 +146,15 @@ async function main(): Promise<void> {
     `  ${RUNTIME_FILE.padEnd(28)} ${formatBytes(file.contents.byteLength).padStart(10)}`,
   )
 
-  // 2. Write the thin importmap entries — `export *` is a STATIC re-export, so
-  //    named imports (`{ createRoot }`, `{ jsx }`) resolve through to the
-  //    runtime, and all four specifiers share its single React.
-  const reExport = `export * from "./${RUNTIME_FILE}"\n`
-  for (const name of ENTRY_FILES) {
-    writeFileSync(path.join(OUT_DIR, name), reExport)
-    console.log(`  ${name.padEnd(28)} ${formatBytes(reExport.length).padStart(10)} (re-export)`)
+  // 2. Write the thin importmap entries. `export *` is a STATIC re-export of all
+  //    NAMED bindings (`{ createRoot }`, `{ jsx }`); the `default` line covers
+  //    default imports. All four specifiers share the runtime's single React.
+  for (const { name, ns } of ENTRY_FILES) {
+    const src =
+      `export * from "./${RUNTIME_FILE}"\n` +
+      `export { ${ns} as default } from "./${RUNTIME_FILE}"\n`
+    writeFileSync(path.join(OUT_DIR, name), src)
+    console.log(`  ${name.padEnd(28)} ${formatBytes(src.length).padStart(10)} (re-export)`)
   }
 
   console.log(`\nbuilt ${ENTRY_FILES.length + 1} files in ${Date.now() - t0}ms`)
