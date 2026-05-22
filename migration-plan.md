@@ -4491,4 +4491,79 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       + diagnostics: plans/pr16-…md. No PAT taken this session.
     </next>
   </pr>
+
+  <pr id="16" branch="staging (direct commit 02c0898 — Railway watch branch; see deviations)"
+      base="staging" covers="ROOT-CAUSED + FIXED the blank render (CORS on /preview-runtime); restored dashboard access; locally PROVED the worker Tailwind-compile bug; mapped the dashboard repo-link bug. LIVE-DEBUG session with the owner."
+      verified="CORS render fix shipped (02c0898) + tsc-clean; LIVE render verification PENDING owner reload post-deploy. Remaining scoped PR16 work (worker Tailwind fix, error-surfacing, dashboard-link fix) NOT committed — rolled to PR17." date="2026-05-22">
+    <secrets-policy>No secrets in chat; no .env read. The owner pasted short-TTL SIGNED Storage URLs (the preview-iframe HTML, the component JS bundle, the globals CSS) so the agent could curl them — same non-secret short-lived class as PR15's connect-state URL. The owner uploaded an agent-compiled globals CSS to the private bucket via the Supabase UI and flipped a repo_connections.active bool in the Table Editor — both owner-performed on their own project, reversible.</secrets-policy>
+
+    <session-nature>Interactive LIVE-DEBUG session (owner driving the browser, agent diagnosing) of the PR15 blank canvas + the owner's report that REV-plugin would not persist in the dashboard. No formal STEP-0a parallel-Explore audit ran — the owner redirected to live troubleshooting of the blockers first (their explicit priority). PR17 should run the deferred 0a sweep.</session-nature>
+
+    <decisions>
+      <decision id="scope" answer="PR16 = the CORS render-unblock (shipped). Worker-Tailwind + error-surfacing + dashboard-link SCOPED but NOT executed (context exhausted) → PR17.">
+        Advisor-vetted scope was render-fix + error-surfacing + dashboard-link (redirect/discovery/controls OUT). Mid-session the render root cause turned out to be CORS, not the CSS the agent first chased, so the render fix = the CORS commit. Only that shipped.
+      </decision>
+      <decision id="manual-css-demo" answer="upload an agent-compiled globals CSS straight to Storage to verify render without a rebuild">
+        The repo_connection's github_install_id (134325166) is the OLD, uninstalled installation, so the worker cannot clone/rebuild. To prove the render path without a rebuild (and without solving the redirect), the agent compiled REV-plugin's globals.css locally with the real Tailwind v4 engine; the owner uploaded it to component-artifacts/&lt;instanceId&gt;/globals.&lt;hash&gt;.css and signGlobalsCss picked it up. TEMPORARY demo artifact; the durable fix is the worker change (PR17).
+      </decision>
+      <decision id="direct-staging-commit" answer="commit the CORS fix directly to staging (not a feature branch)">
+        Railway's Watch Branch is staging; live verification requires the commit on staging. Matches PR14 (proxy code) + PR15 (docs) precedent. Commit 02c0898, two files only (next.config.ts, proxy.ts); design-philosophy/ never staged.
+      </decision>
+    </decisions>
+
+    <step-dashboard-access title="REV-plugin missing from dashboard = repo_connections.active was FALSE (NOT a read-path bug)">
+      Owner reported REV-plugin never persisted (even pre-uninstall). Ground truth via Supabase Table Editor: the row EXISTS, active=FALSE, github_install_id=134325166. Cause: the uninstall webhook sets active=false (connections.ts only ever writes active:true), and the owner's repeated install/uninstall cycles while fighting the redirect kept deactivating it. Flipping active→TRUE in the Table Editor → REV-plugin reappears immediately → CONFIRMS the dashboard read path (useRecentRepos / state.tsx; RLS is TO authenticated) is fine; it was purely the flag. CAVEAT: 134325166 is the dead install — VIEW-only; do NOT trigger a re-sync/rebuild (fails against the dead install, can re-deactivate the row). Already-built artifacts read from Storage and need no live install.
+    </step-dashboard-access>
+
+    <step-dashboard-link-bug title="dashboard repo/branch link → unresolvable UUID URL (mapped, NOT fixed)">
+      Clicking REV-plugin in the dashboard lands on /&lt;workspace&gt;/&lt;UUID&gt;/&lt;branch&gt; (breadcrumb shows a UUID where the repo name belongs). The instance page ([workspace]/[repo]/[branch]/page.tsx:42) resolves by repo NAME (org_repo.split("/")[1] === repo); a UUID never matches → empty registry → empty sidebar. Root: repo-row.tsx:84 imports workspaceForRepo from @/lib/dashboard/demo (the demo module due for deletion after Step 2). The connect-REDIRECT path builds the correct repo-NAME URL (why PR15 saw components; this dashboard-CLICK path was never exercised). WORKAROUND used all session: navigate directly to /personal/REV-plugin/main. FIX (PR17, task #5): use the real workspace; also fix the expanded branch-row link.
+    </step-dashboard-link-bug>
+
+    <step-css-bug title="worker globals.css compile is broken (PROVEN locally; fix designed, NOT shipped)">
+      bundle.ts bundleGlobalsCss compiles globals.css with ESBUILD (loader .css:css) — which does NOT run Tailwind. Local repro on REV-plugin's globals.css: esbuild THROWS `Could not resolve "tailwindcss"` at the `@import "tailwindcss"` line → caught at worker.ts:390 "(continuing)" → NO globals CSS uploaded → signGlobalsCss null → no &lt;link&gt; in the iframe → every component unstyled. A real Tailwind v4 compile via the customer's installed @tailwindcss/postcss (postcss().process, from=globalsCssPath) produces 30,630 bytes WITH all utilities (inline-flex/h-9/px-4/rounded-md/bg-primary; --spacing:0.25rem present). FIX (PR17, task #3): swap esbuild → @tailwindcss/postcss in bundleGlobalsCss. NOTE: REV-plugin's tailwind.config.ts bridges shadcn names→tokens (primary→--color-blue-200) BUT Tailwind v4's default theme ALSO defines --color-blue-200 (light oklch) → collision; token-binding is the discovery/design pass. Verify the worker compile with cwd != clone dir + from=absolute (v4 walks up from the CSS file for project root).
+    </step-css-bug>
+
+    <step-root-cause title="THE blank-render root cause = CORS on /preview-runtime (FIXED, commit 02c0898)">
+      Owner's DevTools console — the decisive evidence, finally captured: `Access to script at '.../preview-runtime/react.mjs' from origin 'null' blocked by CORS policy: No 'Access-Control-Allow-Origin' header`. The preview iframe is sandbox="allow-scripts" WITHOUT allow-same-origin (Step 4.3 hardening) → opaque origin `null`. Its importmap aliases react/react-dom/react-dom/client/react/jsx-runtime → /preview-runtime/*.mjs (same railway host). Module imports from an opaque origin are CROSS-origin → require CORS. Those static files had NO Access-Control-Allow-Origin (next.config.ts had none) AND the proxy matcher ran on .mjs without exempting /preview-runtime. Result: React never loads → NO component mounts → blank for EVERY component (iframe stuck at INITIAL 1×1px). Latent since PR7 (iframe runtime); never caught because the visual render was never exercised until PR15/PR16. FIX (02c0898): (1) next.config.ts headers() → Access-Control-Allow-Origin:* on /preview-runtime/:path*; (2) proxy.ts matcher excludes preview-runtime (like _next/static) so the cookieless iframe isn't 307'd to /login. tsc clean; regex compiles. Do NOT add allow-same-origin to the sandbox (defeats the security model).
+    </step-root-cause>
+
+    <disproven-hypotheses note="documented per owner request — do NOT re-litigate">
+      - CSP host mismatch (signer host ≠ CSP host): RULED OUT — both use process.env.NEXT_PUBLIC_SUPABASE_URL (env.ts:11; route.ts:116).
+      - Supabase-proxy login-gate blocking the bundle: RULED OUT — proxy.ts:45 makes /preview public; bundle is on *.supabase.co (CORS *), curl 200.
+      - Browser Supabase client anonymous / dashboard read-path bug: RULED OUT — both clients use @supabase/ssr cookie session; flipping active→true surfaced REV-plugin immediately.
+      - CSS not delivered / wrong MIME / browser cache: RULED OUT — globals CSS served 200 text/css 30630B with utilities; &lt;link&gt; present in iframe HTML on fresh load.
+      - zero-size via missing --spacing: RULED OUT — --spacing:0.25rem present, utilities present.
+      - bundle broken / export-pick mismatch: RULED OUT — button.js curl 200 valid JS; only react + react/jsx-runtime imports; exports {Button,buttonVariants}; picker resolves Button.
+      - redirect install-time Setup-URL snapshot: already refuted in PR15 (uninstall+reinstall) — do NOT re-suggest.
+      - Console noise (NOT our bug): SES lockdown-install.js + inpage.js MetaMask = the owner's browser extensions; the "postMessage target origin ('&lt;URL&gt;') ≠ recipient 'null'" ×5 is NOT our code (host + bootstrap both use targetOrigin "*"; iframe-mount.tsx:94 / iframe-html.ts:120) — likely an extension/Next-HMR posting to the null-origin iframe. Confirm harmless post-fix.
+    </disproven-hypotheses>
+
+    <deviations>
+      - Direct staging commit (02c0898) for the CORS fix — Railway watch branch + PR14/15 precedent.
+      - No formal STEP-0a parallel-Explore audit (owner prioritized live debugging). PR17 should run it.
+      - PR16 only PARTIALLY executed: CORS fix shipped; worker-Tailwind + error-surfacing + dashboard-link DESIGNED but NOT committed (context exhausted). Rolled to PR17.
+      - TEMPORARY manual CSS artifact in Storage (globals.7f148ac246e1976f.css under instance 52781568-3e07-42f8-89f7-ad9c84c31b2c) to demo render without a rebuild — remove once the worker fix ships + a real rebuild runs.
+    </deviations>
+
+    <verification gate="PR16" result="PARTIAL — CORS render fix shipped + tsc-clean; LIVE render verification PENDING owner reload post-deploy">
+      SHIPPED: commit 02c0898 (CORS on /preview-runtime + proxy matcher exclusion), pushed origin/staging, Railway redeploying. tsc --noEmit clean; matcher regex compiles. With the manual globals CSS already in Storage, a successful deploy should make REV-plugin's button render (blue) — flipping the long-standing "visual render NOT exercised" gap. THE OWNER WAS RELOADING TO CONFIRM AT HANDOVER; the next agent MUST record the live render result.
+      NOT done (→ PR17): worker Tailwind compile fix (task #3, designed + proven locally), error-surfacing (task #4), dashboard repo-link fix (task #5), the localhost:8080 redirect (still P0; DevTools Network capture now proven do-able by the owner), component discovery (only base radix/shadcn layers surface; REV's live components/plugin layer — 22 comps — not shown; owner calls this "unacceptable").
+    </verification>
+
+    <known-risks>
+      - **Redirect (P0, UNSOLVED):** localhost:8080/connect post-install. All hypotheses refuted incl. PR15 uninstall+reinstall. Next: owner runs a DevTools Network "Preserve log" capture of the post-Save redirect chain (now proven do-able this session); read GitHub's stored setup_url via GET /app; scan the HOSTED Supabase Auth URL config for localhost:8080 (line 4215: the hosted Site URL WAS localhost:8080 historically). Host-swap workaround still unblocks connect.
+      - **Component discovery too crude (owner: "unacceptable"):** mount.config → components/ui = base radix/shadcn primitives; REV's real live layer is components/plugin (22). Needs the bulletproof model (design WITH owner: heuristic + config + interactive picker). SEPARATE from render.
+      - **active=FALSE recurrence:** any uninstall re-hides REV-plugin until a re-connect (which needs the redirect). The row's install (134325166) is dead → no rebuilds until reconnect.
+      - **Manual CSS is a crutch:** the live render currently depends on the hand-uploaded globals CSS; ship the worker fix so builds self-produce it.
+      - Carry-forward (PR15): dashboard live-update on build; install-route rate-limit; CORS '*' on the API until WEB_ORIGIN.
+    </known-risks>
+
+    <correction pr="self">
+      The agent first diagnosed the blank render as the worker globals.css/Tailwind problem (PR15's leading hypothesis — which IS a real bug). But the PRIMARY cause is CORS on /preview-runtime; the CSS bug is SECONDARY (only affects styling once components mount). The CSS pursuit (incl. the manual upload) did not render the button because nothing was mounting. Lesson: surface the runtime error FIRST — the swallowed-error problem (host stage-content logs-only) cost most of this session, which is exactly why error-surfacing (task #4) is scoped.
+    </correction>
+
+    <next>
+      PR17 = (1) CONFIRM + record the live render (owner reload); (2) finish the scoped-but-unshipped PR16 work — worker Tailwind compile fix (bundle.ts → @tailwindcss/postcss, proven locally), error-surfacing (worker build_jobs.error + host stage-content error tile incl. MODULE-LOAD errors), dashboard repo-link fix (repo-row.tsx demo-data); (3) the localhost:8080 redirect (DevTools Network capture FIRST); (4) bulletproof component discovery (owner-flagged "unacceptable"; design WITH owner). Then controls-schema override (deferred). Handover: plans/pr17-…md. Carry the OWNER MANDATE forward verbatim.
+    </next>
+  </pr>
 </migration-log>
