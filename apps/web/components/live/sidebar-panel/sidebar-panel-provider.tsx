@@ -33,6 +33,11 @@ export interface SidebarActions {
   setSearchQuery: (query: string) => void
   openDoc: (id: string) => void
   closeDoc: () => void
+  // PR19 — the folder/component picker modal (mirrors openDoc/closeDoc). Both
+  // the footer trigger and the empty-state CTA call openPicker; one
+  // FolderPickerModal (mounted in AppShell) reads pickerOpen.
+  openPicker: () => void
+  closePicker: () => void
   setCollapsed: (next: boolean) => void
   toggleCollapsed: () => void
   expandIfCollapsed: () => void
@@ -49,6 +54,7 @@ export interface SidebarPanelContextValue {
   searchMatch: SearchMatch | null
   effectiveExpandedIds: Set<string>
   openDocId: string | null
+  pickerOpen: boolean
   collapsed: boolean
   actions: SidebarActions
   hoverId: string | null
@@ -97,6 +103,7 @@ export function SidebarPanelProvider({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
   const [searchQuery, setSearchQueryState] = useState<string>("")
   const [openDocId, setOpenDocId] = useState<string | null>(null)
+  const [pickerOpen, setPickerOpen] = useState<boolean>(false)
 
   const [collapsed, setCollapsedState] = useState<boolean>(false)
   const [collapsedReady, setCollapsedReady] = useState(false)
@@ -183,6 +190,14 @@ export function SidebarPanelProvider({
     setOpenDocId(null)
   }, [])
 
+  const openPicker = useCallback(() => {
+    setPickerOpen(true)
+  }, [])
+
+  const closePicker = useCallback(() => {
+    setPickerOpen(false)
+  }, [])
+
   const setCollapsed = useCallback((next: boolean) => {
     setCollapsedState(next)
   }, [])
@@ -216,6 +231,8 @@ export function SidebarPanelProvider({
       setSearchQuery,
       openDoc,
       closeDoc,
+      openPicker,
+      closePicker,
       setCollapsed,
       toggleCollapsed,
       expandIfCollapsed,
@@ -225,6 +242,8 @@ export function SidebarPanelProvider({
       setSearchQuery,
       openDoc,
       closeDoc,
+      openPicker,
+      closePicker,
       setCollapsed,
       toggleCollapsed,
       expandIfCollapsed,
@@ -240,6 +259,7 @@ export function SidebarPanelProvider({
       searchMatch,
       effectiveExpandedIds,
       openDocId,
+      pickerOpen,
       collapsed,
       actions,
       hoverId,
@@ -257,6 +277,7 @@ export function SidebarPanelProvider({
       searchMatch,
       effectiveExpandedIds,
       openDocId,
+      pickerOpen,
       collapsed,
       actions,
       hoverId,

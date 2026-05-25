@@ -108,3 +108,38 @@ export const connectApi = {
       `/repo-connections/${repoConnectionId}/branches`,
     ),
 }
+
+// PR19 — the in-app folder/component picker. Wire shapes must match apps/api
+// (github/instances.ts).
+export interface RepoTreeDir {
+  path: string
+  componentCount: number
+  totalCount: number
+}
+
+export interface RepoTreeResponse {
+  commitSha: string
+  truncated: boolean
+  /** The active per-instance scan override, or null when none (uses defaultScan). */
+  selectedDirs: string[] | null
+  /** Display-only: the dir the build scans with no override (mount.config or fallback). */
+  defaultScan: string | null
+  dirs: RepoTreeDir[]
+}
+
+export const pickerApi = {
+  repoTree: (instanceId: string) =>
+    apiFetch<RepoTreeResponse>(`/instances/${instanceId}/repo-tree`),
+  // dirs=null (or empty) clears the override → back to mount.config/auto-detect.
+  // Persists the selection AND enqueues a rebuild; poll instances.build_status
+  // (browser Supabase RLS session) for completion.
+  setPreviewDirs: (instanceId: string, dirs: string[] | null) =>
+    apiFetch<{
+      status: "queued" | "deduped"
+      previewDirs: string[] | null
+      commitSha: string
+    }>(`/instances/${instanceId}/preview-dirs`, {
+      method: "PATCH",
+      body: { dirs },
+    }),
+}

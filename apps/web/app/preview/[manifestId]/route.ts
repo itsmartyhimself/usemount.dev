@@ -52,6 +52,7 @@ interface ManifestRow {
   title: string | null
   kind: BuildManifestKind | null
   artifact_url: string | null
+  preview_artifact_url: string | null
   source_hash: string | null
 }
 
@@ -69,7 +70,9 @@ export async function GET(
   const supabase = await createSupabaseServerClient()
   const { data: row, error } = await supabase
     .from("component_manifests")
-    .select("id, instance_id, slug, title, kind, artifact_url, source_hash")
+    .select(
+      "id, instance_id, slug, title, kind, artifact_url, preview_artifact_url, source_hash",
+    )
     .eq("id", manifestId)
     .maybeSingle<ManifestRow>()
   if (error) return errorResponse(`lookup failed: ${error.message}`, 500)
@@ -94,8 +97,18 @@ export async function GET(
   let perComponentCssUrl: string | null = null
   let globalsCssUrl: string | null = null
   let providersUrl: string | null = null
+  let previewUrl: string | null = null
   try {
     bundleUrl = await signStoragePath(row.artifact_url)
+    // PR19 — optional preview-example bundle. Signed like the component bundle;
+    // the iframe renders its default export instead of the bare component.
+    if (row.preview_artifact_url) {
+      try {
+        previewUrl = await signStoragePath(row.preview_artifact_url)
+      } catch {
+        previewUrl = null
+      }
+    }
     if (row.source_hash) {
       const cssKey = row.artifact_url.replace(/\.js$/, ".css")
       try {
@@ -121,6 +134,7 @@ export async function GET(
     perComponentCssUrl,
     globalsCssUrl,
     providersUrl,
+    previewUrl,
     protocolVersion: IFRAME_PROTOCOL_VERSION,
   })
   return new Response(html, {

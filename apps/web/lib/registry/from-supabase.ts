@@ -41,6 +41,7 @@ interface ComponentManifestRow {
   states_json: Record<string, unknown>
   props_schema_json: Record<string, string>
   artifact_url: string | null
+  preview_artifact_url: string | null
   source_hash: string | null
 }
 
@@ -104,6 +105,7 @@ export function buildManifestMap(
       propsSchema: r.props_schema_json ?? {},
       states: r.states_json ?? {},
       artifactUrl: r.artifact_url,
+      previewArtifactUrl: r.preview_artifact_url,
       sourceHash: r.source_hash ?? "",
       defaultProps: synthesizeDefaultProps(controls),
     })
@@ -212,7 +214,7 @@ export async function fetchInstanceRegistry(
   const { data, error } = await supabase
     .from("component_manifests")
     .select(
-      "id, instance_id, slug, folder_path, title, kind, variants_json, states_json, props_schema_json, artifact_url, source_hash",
+      "id, instance_id, slug, folder_path, title, kind, variants_json, states_json, props_schema_json, artifact_url, preview_artifact_url, source_hash",
     )
     .eq("instance_id", instanceId)
   if (error) {

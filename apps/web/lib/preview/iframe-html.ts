@@ -21,6 +21,15 @@ export interface RenderIframeOpts {
    * default export `Providers({ children })` and wraps every render with it.
    */
   providersUrl: string | null
+  /**
+   * PR19 — signed Storage URL for a sibling `<Component>.preview.tsx` example
+   * bundle, or null. When present, the bootstrap renders the example's default
+   * export (a real, self-contained usage that supplies the children/props a
+   * contentless composite needs) INSTEAD of the bare component bundle. The
+   * example is bundled exactly like a component (React externalized to the
+   * iframe runtime), so it loads through the same importmap + sandbox.
+   */
+  previewUrl: string | null
   /** Wire version — kept in sync with packages/shared/src/iframe-protocol.ts. */
   protocolVersion: number
 }
@@ -108,6 +117,11 @@ import { createRoot } from "react-dom/client"
 
 const PROTOCOL_VERSION = ${opts.protocolVersion}
 const BUNDLE_URL = ${jsonForScript(opts.bundleUrl)}
+const PREVIEW_URL = ${jsonForScript(opts.previewUrl)}
+// Render the preview EXAMPLE when one exists (it supplies its own children/
+// props), else the bare component bundle. Same module shape either way — a
+// default or first-PascalCase export — so pickComponent handles both.
+const COMPONENT_URL = PREVIEW_URL || BUNDLE_URL
 const PROVIDERS_URL = ${jsonForScript(opts.providersUrl)}
 
 const rootEl = document.getElementById("root")
@@ -204,7 +218,7 @@ window.addEventListener("unhandledrejection", (event) => {
 
 ;(async () => {
   try {
-    const bundleP = import(BUNDLE_URL)
+    const bundleP = import(COMPONENT_URL)
     const providersP = PROVIDERS_URL ? import(PROVIDERS_URL) : Promise.resolve(null)
     const [mod, providersMod] = await Promise.all([bundleP, providersP])
     Component = pickComponent(mod)

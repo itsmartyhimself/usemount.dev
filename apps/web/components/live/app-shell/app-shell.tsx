@@ -4,6 +4,7 @@ import { Canvas } from "./canvas"
 import { CanvasViewProvider } from "./canvas-view-context"
 import { StaleViewerTrigger } from "./stale-viewer-trigger"
 import { DocModal } from "@/components/live/doc-modal"
+import { FolderPickerModal } from "@/components/live/folder-picker"
 import {
   SidebarPanel,
   SidebarPanelProvider,
@@ -76,6 +77,7 @@ export function AppShell({
             <Canvas />
           </main>
           <DocModal />
+          <FolderPickerModal instanceId={instance?.instanceId} />
           <StaleViewerTrigger
             instanceId={instance?.instanceId}
             initialSha={instance?.lastSyncedCommitSha}
