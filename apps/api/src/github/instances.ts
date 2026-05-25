@@ -147,10 +147,12 @@ instanceRoutes.get("/instances/:id/repo-tree", async (c) => {
       instance.last_synced_commit_sha ??
       (await octo.repos.getBranch({ owner, repo, branch: instance.branch })).data
         .commit.sha
-  } catch {
-    throw new HTTPException(502, {
-      message: "Couldn't reach GitHub to read the branch. Try again.",
-    })
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    console.error(
+      `[repo-tree] branch read failed (repo=${conn.org_repo}, install=${conn.github_install_id}): ${detail}`,
+    )
+    throw new HTTPException(502, { message: `Couldn't read the branch: ${detail}` })
   }
 
   let dirs: DirNode[]
@@ -164,10 +166,12 @@ instanceRoutes.get("/instances/:id/repo-tree", async (c) => {
     })
     truncated = tree.truncated ?? false
     dirs = buildDirNodes(tree.tree)
-  } catch {
-    throw new HTTPException(502, {
-      message: "Couldn't read the repo file tree from GitHub. Try again.",
-    })
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    console.error(
+      `[repo-tree] tree read failed (repo=${conn.org_repo}, install=${conn.github_install_id}, sha=${commitSha}): ${detail}`,
+    )
+    throw new HTTPException(502, { message: `Couldn't read the file tree: ${detail}` })
   }
 
   const defaultScan = await resolveDefaultScan(octo, owner, repo, commitSha, dirs)
