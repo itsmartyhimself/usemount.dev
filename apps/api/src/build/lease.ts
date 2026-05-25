@@ -54,6 +54,7 @@ export async function completeJob(jobId: string, buildDurationMs: number): Promi
 
 export async function failJob(
   jobId: string,
+  instanceId: string,
   errMsg: string,
   buildDurationMs: number,
 ): Promise<void> {
@@ -68,6 +69,20 @@ export async function failJob(
     })
     .eq("id", jobId)
   if (error) throw new Error(`failJob: ${error.message}`)
+  // Mirror the failure onto the instance. processJob only sets
+  // instances.build_status='succeeded' at its very end, so a throw leaves it
+  // stuck at 'queued' — which the dashboard breadcrumb renders as "syncing"
+  // forever (connections.ts toBranchSyncStatus: queued→syncing). The picker
+  // polls build_jobs (so it's unaffected), but the breadcrumb needs this.
+  const { error: instErr } = await supabaseAdmin()
+    .from("instances")
+    .update({ build_status: "failed" })
+    .eq("id", instanceId)
+  if (instErr) {
+    // Non-fatal: the job is already marked failed; a stale instance status is
+    // recoverable on the next build. Log, don't throw.
+    console.warn(`failJob: instance status update failed: ${instErr.message}`)
+  }
 }
 
 /**

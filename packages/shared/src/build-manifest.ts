@@ -62,6 +62,12 @@ export interface BuildManifest {
   // states_json. Empty until override files are honored.
   states: Record<string, unknown>
   artifactUrl: string | null // → artifact_url (Supabase Storage; null if build-fail)
+  // Sibling `<Component>.preview.tsx` example bundle (Storage key, signed on
+  // read) → preview_artifact_url. When set, the iframe renders the example's
+  // default export — a real, self-contained usage that can supply the
+  // children/props a contentless composite needs — instead of the bare
+  // component. null = no example file (render the bare component).
+  previewArtifactUrl: string | null // → preview_artifact_url
   sourceHash: string // → source_hash (skip-rebuild when unchanged)
   // Why introspection produced no controls, when it didn't. Non-persisted
   // diagnostic (NOT a DB column) — drives the "limited introspection" sidebar

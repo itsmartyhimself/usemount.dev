@@ -230,6 +230,7 @@ async function main() {
       propsSchema,
       states: {},
       artifactUrl: size ? `spike://bundle/${slug}.js` : null,
+      previewArtifactUrl: null,
       sourceHash: createHash("sha256").update(src).digest("hex").slice(0, 16),
       introspectionGap: gap,
     }

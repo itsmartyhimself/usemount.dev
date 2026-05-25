@@ -3,6 +3,7 @@ import { cors } from "hono/cors"
 import { logger } from "hono/logger"
 import { installRoutes } from "./github/install-callback.js"
 import { repoConnectionRoutes } from "./github/connections.js"
+import { instanceRoutes } from "./github/instances.js"
 import { webhookRoutes } from "./github/webhook.js"
 
 // Builds the configured Hono `app` with all routers mounted, identical to
@@ -37,6 +38,7 @@ export function buildApp() {
   app.get("/health", (c) => c.json({ ok: true }))
   app.route("/", installRoutes)
   app.route("/", repoConnectionRoutes)
+  app.route("/", instanceRoutes)
   app.route("/", webhookRoutes)
   return app
 }

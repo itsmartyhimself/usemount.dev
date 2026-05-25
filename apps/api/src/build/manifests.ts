@@ -32,6 +32,7 @@ export async function syncManifests(opts: {
     states_json: m.states,
     props_schema_json: m.propsSchema,
     artifact_url: m.artifactUrl,
+    preview_artifact_url: m.previewArtifactUrl,
     source_hash: m.sourceHash,
   }))
 

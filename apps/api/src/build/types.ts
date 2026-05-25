@@ -25,6 +25,10 @@ export interface InstanceRow {
   repo_connection_id: string
   branch: string
   last_synced_commit_sha: string | null
+  // Per-instance scan-scope override (the in-app picker). null/absent = use
+  // mount.config.ts componentsDir or the fallback chain. A jsonb array of
+  // repo-root-relative dir paths = scan EXACTLY those folders (multi-root).
+  preview_dirs: string[] | null
 }
 
 export interface RepoConnectionRow {

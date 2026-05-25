@@ -55,9 +55,11 @@ const NODE_MODULES_CACHE =
   process.env.NODE_MODULES_CACHE ?? "/var/lib/usemount/node-modules-cache"
 
 // `usemount` skips the Step 5.5 sibling override files (`Button.usemount.tsx`)
-// so they're never treated as buildable component entries.
+// and `preview` skips the PR19 example files (`Button.preview.tsx`) so neither
+// is ever treated as a buildable component entry (the example is bundled by
+// reference from its sibling component, not scanned as a component of its own).
 const COMPONENT_SKIP =
-  /\.(manifest|config|test|spec|stories|usemount|d)\.(tsx?|ts)$|(^|\/)index\.tsx?$/
+  /\.(manifest|config|test|spec|stories|usemount|preview|d)\.(tsx?|ts)$|(^|\/)index\.tsx?$/
 
 interface WorkerHandle {
   workerId: string
@@ -131,6 +133,7 @@ export function startWorkerLoop(): WorkerHandle {
           console.error(`[worker:${workerId}] failed ${job.id}: ${errMsg}`)
           await failJob(
             job.id,
+            job.instance_id,
             errMsg,
             Math.round(performance.now() - start),
           ).catch((fe) =>
@@ -186,7 +189,7 @@ async function processJob(
   // Fetch instance + repo_connection for clone parameters.
   const { data: instance, error: instErr } = await supabaseAdmin()
     .from("instances")
-    .select("id, repo_connection_id, branch, last_synced_commit_sha")
+    .select("id, repo_connection_id, branch, last_synced_commit_sha, preview_dirs")
     .eq("id", job.instance_id)
     .maybeSingle<InstanceRow>()
   if (instErr) throw new Error(`fetch instance: ${instErr.message}`)
@@ -222,12 +225,22 @@ async function processJob(
     if (isStolen()) return
 
     const mount = parseMountConfig(cloneResult.workDir)
-    if (!mount.resolvedComponentsDir) {
+    // Scan scope: the in-app picker's per-instance preview_dirs OVERRIDES
+    // mount.config.ts (PR19). When set, scan exactly those folders (multi-root,
+    // recursive); else fall back to the single mount.config/auto-detect dir.
+    // resolvedGlobalsCss stays from mount.config either way; `hidden` is
+    // bypassed under an override (the picker is the hide/show mechanism).
+    const scanRoots = resolveScanRoots(
+      cloneResult.workDir,
+      instance.preview_dirs,
+      mount.resolvedComponentsDir,
+    )
+    if (scanRoots.length === 0) {
       throw new Error("no_components_dir")
     }
     const tsconfigPath = findTsconfig(cloneResult.workDir)
 
-    // Source-diff over-approximation: any change outside componentsDir =
+    // Source-diff over-approximation: any change outside the scan roots =
     // rebuild all (shared deps like lib/utils.ts may have changed). First
     // sync (last_synced=null) = build all. Per-component source_hash is
     // computed below — currently informational; the actual per-component
@@ -237,7 +250,7 @@ async function processJob(
       cloneResult.workDir,
       instance.last_synced_commit_sha,
       job.commit_sha,
-      mount.resolvedComponentsDir,
+      scanRoots,
     )
     if (isStolen()) return
 
@@ -300,12 +313,17 @@ async function processJob(
       skipAddingFilesFromTsConfig: true,
     })
 
-    const entries = collectEntries(mount.resolvedComponentsDir)
+    const entries = collectEntries(scanRoots)
     const manifests: BuildManifest[] = []
     for (const entry of entries) {
       if (isStolen()) return
-      const rel = path.relative(mount.resolvedComponentsDir, entry)
+      // slug = workDir-relative path (collision-proof across multiple scan
+      // roots: components/ui/button.tsx → components-ui-button vs
+      // components/plugin/button.tsx → components-plugin-button). title = the
+      // bare filename for a readable sidebar label; folderPath does grouping.
+      const rel = path.relative(cloneResult.workDir, entry)
       const slug = rel.replace(/\.tsx$/, "").replace(/[/\\]/g, "-")
+      const title = path.basename(entry).replace(/\.tsx$/, "")
       const src = readFileSync(entry, "utf8")
       const sourceHash = createHash("sha256").update(src).digest("hex").slice(0, 16)
       const folderPath = path.relative(cloneResult.workDir, path.dirname(entry))
@@ -339,15 +357,52 @@ async function processJob(
             bytes: bundle.cssBytes,
           })
         }
+        // PR19 — sibling `<Component>.preview.tsx`: a real, self-contained
+        // usage example. When present, bundle it (esbuild only, no eval — same
+        // trust boundary as the component; the sandboxed iframe is the control)
+        // and point the manifest at it; the iframe renders the example's
+        // default export instead of the contentless bare component, so a
+        // composite like PluginContainer shows its real composition. Non-fatal:
+        // a broken example degrades to bare render + a build warning.
+        let previewArtifactUrl: string | null = null
+        const previewPath = previewFilePath(entry)
+        if (existsSync(previewPath)) {
+          try {
+            const previewSrc = readFileSync(previewPath, "utf8")
+            const previewHash = createHash("sha256")
+              .update(previewSrc)
+              .digest("hex")
+              .slice(0, 16)
+            const previewBundle = await bundleComponent({
+              entry: previewPath,
+              workDir: cloneResult.workDir,
+              tsconfigPath,
+            })
+            previewArtifactUrl = await uploadJs({
+              instanceId: instance.id,
+              slug: `${slug}.preview`,
+              sourceHash: previewHash,
+              bytes: previewBundle.jsBytes,
+            })
+            console.log(`[worker:${workerId}] preview example bundled (${slug})`)
+          } catch (e) {
+            const msg = (e as Error).message
+            console.warn(
+              `[worker:${workerId}] preview example ${slug} failed: ${msg} (bare render)`,
+            )
+            buildWarnings.push(`preview(${slug}): ${msg}`)
+          }
+        }
         manifests.push({
           slug,
           folderPath,
-          title: slug,
+          title,
           kind: "component",
           controls,
           propsSchema,
           states: presets,
           artifactUrl,
+          previewArtifactUrl,
           sourceHash,
           introspectionGap: gap,
         })
@@ -359,7 +414,7 @@ async function processJob(
         manifests.push({
           slug,
           folderPath,
-          title: slug,
+          title,
           kind: "unsupported",
           controls: {
             booleans: [],
@@ -372,6 +427,7 @@ async function processJob(
           propsSchema: {},
           states: {},
           artifactUrl: null,
+          previewArtifactUrl: null,
           sourceHash,
         })
       }
@@ -446,7 +502,7 @@ async function shouldRebuildAll(
   workDir: string,
   fromSha: string | null,
   toSha: string,
-  componentsDir: string,
+  roots: string[],
 ): Promise<boolean> {
   if (!fromSha) return true // first sync — everything is new
   // We may not have fromSha in our shallow clone (only the toSha commit is
@@ -463,15 +519,54 @@ async function shouldRebuildAll(
     })
     p.on("close", (code) => {
       if (code !== 0) return resolve(true)
-      const rel = path.relative(workDir, componentsDir).replaceAll(path.sep, "/")
+      const rels = roots.map((r) =>
+        path.relative(workDir, r).replaceAll(path.sep, "/"),
+      )
       const lines = out.split("\n").filter(Boolean)
-      const allInComp = lines.every(
-        (l) => l === rel || l.startsWith(rel + "/"),
+      const allInComp = lines.every((l) =>
+        rels.some((rel) => l === rel || l.startsWith(rel + "/")),
       )
       resolve(!allInComp)
     })
     p.on("error", () => resolve(true))
   })
+}
+
+// Resolve the directories the worker scans for components. The in-app picker's
+// per-instance preview_dirs (PR19) wins: each entry is resolved relative to the
+// clone, guarded against path traversal, and kept only if it's a real
+// directory in this commit. Nested picks (e.g. "components" + "components/ui")
+// are fine — collectEntries dedups the merged file list. Falls back to the
+// single mount.config/auto-detect dir when no valid override is present.
+function resolveScanRoots(
+  workDir: string,
+  previewDirs: string[] | null,
+  fallbackDir: string | null,
+): string[] {
+  if (Array.isArray(previewDirs) && previewDirs.length > 0) {
+    const roots: string[] = []
+    for (const rel of previewDirs) {
+      if (typeof rel !== "string" || rel.length === 0) continue
+      const abs = path.resolve(workDir, rel)
+      // Must stay within the clone — reject "../" escapes even though the API
+      // validates too (defense in depth; preview_dirs is user-controlled).
+      if (abs !== workDir && !abs.startsWith(workDir + path.sep)) continue
+      try {
+        if (statSync(abs).isDirectory()) roots.push(abs)
+      } catch {
+        // not present in this commit — skip
+      }
+    }
+    if (roots.length > 0) return roots
+  }
+  return fallbackDir ? [fallbackDir] : []
+}
+
+// Sibling example path for a component entry: `Foo.tsx` → `Foo.preview.tsx`.
+function previewFilePath(componentEntry: string): string {
+  const dir = path.dirname(componentEntry)
+  const base = path.basename(componentEntry).replace(/\.tsx$/, "")
+  return path.join(dir, `${base}.preview.tsx`)
 }
 
 function findTsconfig(workDir: string): string {
@@ -482,13 +577,29 @@ function findTsconfig(workDir: string): string {
   throw new Error("no tsconfig.json")
 }
 
-function collectEntries(dir: string): string[] {
+// Scan one or more roots, recursively, merging into a single deduped entry
+// list. Dedup matters when a pick nests another (e.g. "components" already
+// recurses into "components/ui", so picking both must not build ui twice).
+function collectEntries(roots: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const root of roots) {
+    for (const full of collectEntriesIn(root)) {
+      if (seen.has(full)) continue
+      seen.add(full)
+      out.push(full)
+    }
+  }
+  return out
+}
+
+function collectEntriesIn(dir: string): string[] {
   const out: string[] = []
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, e.name)
     if (e.isDirectory()) {
       if (e.name === "node_modules" || e.name.startsWith(".")) continue
-      out.push(...collectEntries(full))
+      out.push(...collectEntriesIn(full))
     } else if (e.name.endsWith(".tsx") && !COMPONENT_SKIP.test(full)) {
       out.push(full)
     }

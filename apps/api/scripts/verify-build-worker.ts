@@ -290,7 +290,7 @@ async function caseFail(s: SetupResult, workerId: string): Promise<void> {
   const leased = await leaseNextJob(workerId)
   if (!leased) throw new Error("setup: lease failed")
   const longErr = "x".repeat(5000) // > 4000 truncation point
-  await failJob(leased.id, longErr, 567)
+  await failJob(leased.id, s.instanceId, longErr, 567)
   const after = await getJob(leased.id)
   if (after?.status !== "failed")
     throw new Error(`expected failed, got ${after?.status}`)
