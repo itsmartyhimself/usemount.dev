@@ -8,16 +8,21 @@ import { useState, type CSSProperties } from "react"
 import { Folders } from "@carbon/icons-react"
 import { useSidebarPanel } from "@/components/live/sidebar-panel/use-sidebar-panel"
 
+// Mirrors the size-32 sidebar Row (row.config.ts) so the trigger reads as one
+// of the component rows above it — same 32px height, spacing-3 padding + gap,
+// radius-2. Collapsed: center the icon with spacing-2-5, like a collapsed Row.
 function buttonStyle(collapsed: boolean, hovered: boolean): CSSProperties {
   return {
     display: "flex",
     alignItems: "center",
     justifyContent: collapsed ? "center" : "flex-start",
-    gap: "var(--spacing-2)",
+    gap: "var(--spacing-3)",
     width: "100%",
-    paddingBlock: "var(--spacing-2)",
-    paddingInline: collapsed ? "0" : "var(--spacing-2)",
-    marginBlock: "var(--spacing-2)",
+    height: 32,
+    boxSizing: "border-box",
+    paddingBlock: "var(--spacing-2-5)",
+    paddingInline: collapsed ? "var(--spacing-2-5)" : "var(--spacing-3)",
+    marginBlock: "var(--spacing-1)",
     borderRadius: "var(--radius-2)",
     border: 0,
     background: hovered ? "var(--color-bg-hover)" : "transparent",
@@ -42,7 +47,7 @@ export function FolderPickerTrigger() {
     >
       <Folders size={16} style={{ flexShrink: 0 }} />
       {!collapsed ? (
-        <span className="type-4 text-trim">Choose folders</span>
+        <span className="type-4">Choose folders</span>
       ) : null}
     </button>
   )

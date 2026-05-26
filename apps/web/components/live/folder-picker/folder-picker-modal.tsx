@@ -87,7 +87,9 @@ const scrollStyle: CSSProperties = {
   overflowY: "auto",
   maxHeight: "min(52vh, 420px)",
   minHeight: 160,
-  paddingInline: "var(--spacing-3)",
+  // spacing-2 here + each row's spacing-3 paddingInline lines the row text up
+  // with the spacing-5 header/footer gutters (no doubled inset).
+  paddingInline: "var(--spacing-2)",
   paddingBlock: "var(--spacing-2)",
 }
 
@@ -334,7 +336,7 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
               type="button"
               onClick={() => actions.closePicker()}
               disabled={busy}
-              className="type-4 text-trim"
+              className="type-4"
               style={secondaryBtn(busy)}
             >
               {saveState === "build-error" ? "Close" : "Cancel"}
@@ -343,7 +345,7 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
               type="button"
               onClick={handleSave}
               disabled={busy || !tree || !!loadError}
-              className="type-4 text-trim"
+              className="type-4"
               style={primaryBtn(busy || !tree || !!loadError)}
             >
               {saveState === "saving"
@@ -444,13 +446,19 @@ function PickerRow({
   const checked = includedByParent || selected.has(node.path)
   const [hovered, setHovered] = useState(false)
 
+  // Mirrors the size-32 sidebar Row exactly (row.config.ts ROW_DIMENSIONS[32]):
+  // fixed 32px height, spacing-3 horizontal + gap, radius-2 — so a tree row
+  // reads identically to the component rows in the sidebar. Height drives the
+  // vertical rhythm; paddingBlock is nominal (border-box, like Row).
   const rowStyle: CSSProperties = {
     display: "flex",
     alignItems: "center",
-    gap: "var(--spacing-2)",
-    paddingBlock: "var(--spacing-2)",
-    paddingInline: "var(--spacing-2)",
-    paddingLeft: `calc(var(--spacing-2) + ${depth} * var(--spacing-5))`,
+    gap: "var(--spacing-3)",
+    height: 32,
+    boxSizing: "border-box",
+    paddingBlock: "var(--spacing-2-5)",
+    paddingRight: "var(--spacing-3)",
+    paddingLeft: `calc(var(--spacing-3) + ${depth} * var(--spacing-5))`,
     borderRadius: "var(--radius-2)",
     cursor: includedByParent ? "default" : "pointer",
     background: hovered && !includedByParent ? "var(--color-bg-hover)" : "transparent",
@@ -507,15 +515,18 @@ function PickerRow({
             justifyContent: "center",
             flexShrink: 0,
             borderRadius: "var(--radius-1)",
+            // The design's real high-contrast selection is a solid text-primary
+            // fill (every active Row uses it) — NOT --color-accent, which is a
+            // faint hover-grey and read as a mushy checkbox.
             border: checked
-              ? "1px solid var(--color-accent)"
+              ? "1px solid var(--color-text-primary)"
               : "1px solid var(--color-border-secondary)",
-            background: checked ? "var(--color-accent)" : "transparent",
+            background: checked ? "var(--color-text-primary)" : "transparent",
             opacity: includedByParent ? 0.55 : 1,
           }}
         >
           {checked ? (
-            <Checkmark size={12} style={{ color: "var(--color-accent-foreground)" }} />
+            <Checkmark size={12} style={{ color: "var(--color-bg-primary)" }} />
           ) : null}
         </span>
 
@@ -524,7 +535,10 @@ function PickerRow({
           style={{ color: "var(--color-text-secondary)", flexShrink: 0 }}
         />
         <span
-          className="type-4 text-trim"
+          // No .text-trim: the cap-height trim's pseudo-margins get clipped by
+          // overflow:hidden and crop folder-name glyphs. Row labels truncate
+          // with plain type-4 + ellipsis — match that.
+          className="type-4"
           style={{
             color: includedByParent
               ? "var(--color-text-tertiary)"
@@ -539,7 +553,7 @@ function PickerRow({
           {node.name}
         </span>
         <span
-          className="type-3 text-trim"
+          className="type-3"
           style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }}
         >
           {node.totalCount}
@@ -562,28 +576,42 @@ function PickerRow({
   )
 }
 
+// Mirror the design system's smallest Button (button.config.ts size="small"):
+// 36px tall, radius-3, spacing-6 horizontal padding, spacing-3 gap. Height
+// drives the vertical breathing room (zero explicit vertical padding) exactly
+// like Button — colors are unchanged, only the cramped sizing is fixed.
+const btnBase: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "var(--spacing-3)",
+  height: 36,
+  boxSizing: "border-box",
+  paddingBlock: 0,
+  paddingInline: "var(--spacing-6)",
+  borderRadius: "var(--radius-3)",
+  borderWidth: 1,
+  borderStyle: "solid",
+}
+
 function primaryBtn(disabled: boolean): CSSProperties {
   return {
-    paddingBlock: "var(--spacing-2)",
-    paddingInline: "var(--spacing-4)",
-    borderRadius: "var(--radius-2)",
-    border: "1px solid transparent",
+    ...btnBase,
+    borderColor: "transparent",
     background: "var(--color-primary)",
     color: "var(--color-primary-foreground)",
-    cursor: disabled ? "default" : "pointer",
-    opacity: disabled ? 0.5 : 1,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.4 : 1,
   }
 }
 
 function secondaryBtn(disabled: boolean): CSSProperties {
   return {
-    paddingBlock: "var(--spacing-2)",
-    paddingInline: "var(--spacing-4)",
-    borderRadius: "var(--radius-2)",
-    border: "1px solid var(--color-border-primary)",
+    ...btnBase,
+    borderColor: "var(--color-border-primary)",
     background: "transparent",
     color: "var(--color-text-secondary)",
-    cursor: disabled ? "default" : "pointer",
-    opacity: disabled ? 0.5 : 1,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.4 : 1,
   }
 }
