@@ -246,15 +246,23 @@ function postFrame(bbox, frame, offset) {
   postToHost({ v: PROTOCOL_VERSION, kind: "resize", bbox, frame, offset })
 }
 
+// Monotonic envelope held while a popover is open: never shrink mid-open, so
+// Floating UI can't ping-pong (shrink viewport → it repositions → union shrinks
+// → shrink again → jitter). Grow to fit, hold, reset to the component box on
+// close. Converges in ~1 frame and stays put.
+let openW = 0
+let openH = 0
 let rafId = 0
 function syncFrame() {
   rafId = 0
   const m = measureFrame()
   if (m.hasOverlay) {
-    // A popover/tooltip is open — grow the frame to the union containing it.
-    postFrame(m.bbox, m.frame, m.offset)
+    if (m.frame.width > openW) openW = m.frame.width
+    if (m.frame.height > openH) openH = m.frame.height
+    postFrame(m.bbox, { width: openW, height: openH }, m.offset)
   } else {
-    // Resting (or just closed) — frame == the component box, no offset.
+    openW = 0
+    openH = 0
     postFrame(m.bbox, m.bbox, { x: 0, y: 0 })
   }
 }

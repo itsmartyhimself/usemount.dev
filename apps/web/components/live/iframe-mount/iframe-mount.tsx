@@ -98,9 +98,6 @@ export function IframeMount({
     offsetY: 0,
   })
   const [ready, setReady] = useState(false)
-  // The first non-zero fit (1×1 → bbox) must not animate; flips true after
-  // ready so later popover grow/shrink transitions smoothly.
-  const didFitRef = useRef(false)
   // Latest props in a ref so the message handler doesn't capture stale
   // closures, AND so `ready` can flush whatever the latest props are at the
   // moment the iframe finishes loading.
@@ -205,17 +202,14 @@ export function IframeMount({
     }
   }, [instanceId, manifestId])
 
-  // Once ready, allow size/transform transitions (the "flexbox-like" dynamic
-  // grow/shrink the owner asked for). The first fit (1×1 → bbox) stays instant.
-  useEffect(() => {
-    if (ready) didFitRef.current = true
-  }, [ready])
-
   const iframeStyle = useMemo<CSSProperties>(() => {
     // Keep #root visually pinned where the canvas placed it while the frame
     // grows around it. The wrapper (stage-content) centers the grown frame on
     // the anchor via translate(-50%,-50%); shift the iframe back by half the
-    // asymmetric growth minus the left/top pad so #root's center stays put.
+    // growth so #root's center stays put. Resize is INSTANT (no transition):
+    // animating width/height makes Floating UI re-place the popover every frame
+    // for the animation, which reads as jitter. One instant resize → one
+    // reposition. The grown iframe area is transparent, so it isn't seen.
     const tx = (geo.frameW - geo.bboxW) / 2 - geo.offsetX
     const ty = (geo.frameH - geo.bboxH) / 2 - geo.offsetY
     return {
@@ -223,9 +217,6 @@ export function IframeMount({
       width: `${geo.frameW}px`,
       height: `${geo.frameH}px`,
       transform: `translate(${tx}px, ${ty}px)`,
-      transition: didFitRef.current
-        ? "width 140ms ease, height 140ms ease, transform 140ms ease"
-        : undefined,
     }
   }, [geo])
 
