@@ -198,13 +198,80 @@ window.addEventListener("message", (event) => {
   }
 })
 
-const ro = new ResizeObserver(() => {
-  const bbox = reportBbox()
-  if (bbox.width > 0 || bbox.height > 0) {
-    postToHost({ v: PROTOCOL_VERSION, kind: "resize", bbox })
+// --- Overflow: popovers/tooltips portal OUTSIDE #root (into <body>) and paint
+// beyond its box; the iframe is a hard clip boundary, so to SHOW them we grow
+// the FRAME to the union of #root + the floating content (the host grows the
+// iframe element and shifts it so #root stays pinned, snapping back on close).
+// We target the Radix Popper wrapper + ARIA roles — NOT every body node — so a
+// full-viewport dismiss layer can't inflate the union into a feedback loop.
+//
+// bbox stays the component's own size so the canvas never zooms. #root is glued
+// to the iframe's top-left (body margin:0) and Floating UI keeps content inside
+// the viewport (origin = #root's corner), so the union only ever extends
+// DOWN/RIGHT — offset is therefore always {0,0} and the host's (frame-bbox)/2
+// shift pins #root. (No pre-grow: it would have to lie about the offset and
+// bounce the component for a frame. If a popover bigger than the resting
+// viewport ever needs room ABOVE/LEFT, push #root with body padding — PR21.)
+const OVERLAY_SELECTOR = "[data-radix-popper-content-wrapper],[data-floating-ui-portal],[role=tooltip],[role=menu],[role=listbox],[role=dialog]"
+
+function measureFrame() {
+  const root = rootEl.getBoundingClientRect()
+  let minX = root.left, minY = root.top, maxX = root.right, maxY = root.bottom
+  let hasOverlay = false
+  for (const el of document.querySelectorAll(OVERLAY_SELECTOR)) {
+    const r = el.getBoundingClientRect()
+    if (r.width === 0 && r.height === 0) continue
+    hasOverlay = true
+    if (r.left < minX) minX = r.left
+    if (r.top < minY) minY = r.top
+    if (r.right > maxX) maxX = r.right
+    if (r.bottom > maxY) maxY = r.bottom
   }
-})
+  return {
+    bbox: { width: Math.round(root.width), height: Math.round(root.height) },
+    frame: { width: Math.round(maxX - minX), height: Math.round(maxY - minY) },
+    offset: { x: Math.round(root.left - minX), y: Math.round(root.top - minY) },
+    hasOverlay,
+  }
+}
+
+// Dedup identical posts — the MutationObserver fires on every Floating UI style
+// tick, but the frame only changes when a popover opens/closes/resizes.
+let lastKey = ""
+function postFrame(bbox, frame, offset) {
+  if (bbox.width <= 0 && bbox.height <= 0) return
+  const key = bbox.width + "x" + bbox.height + " " + frame.width + "x" + frame.height + " " + offset.x + "," + offset.y
+  if (key === lastKey) return
+  lastKey = key
+  postToHost({ v: PROTOCOL_VERSION, kind: "resize", bbox, frame, offset })
+}
+
+let rafId = 0
+function syncFrame() {
+  rafId = 0
+  const m = measureFrame()
+  if (m.hasOverlay) {
+    // A popover/tooltip is open — grow the frame to the union containing it.
+    postFrame(m.bbox, m.frame, m.offset)
+  } else {
+    // Resting (or just closed) — frame == the component box, no offset.
+    postFrame(m.bbox, m.bbox, { x: 0, y: 0 })
+  }
+}
+
+function scheduleSync() {
+  if (rafId) return
+  rafId = requestAnimationFrame(syncFrame)
+}
+
+const ro = new ResizeObserver(scheduleSync)
 ro.observe(rootEl)
+ro.observe(document.body)
+// Popovers portal in/out as <body> subtree mutations and reposition via inline
+// style — watch both so we react when one opens/closes/moves even though #root
+// itself didn't change size.
+const mo = new MutationObserver(scheduleSync)
+mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "data-state", "data-side"] })
 
 window.addEventListener("error", (event) => {
   if (renderedOk) return

@@ -62,6 +62,18 @@ const INITIAL_W = 1
 const INITIAL_H = 1
 const MAX_DIMENSION = 8192 // sanity clamp on iframe-reported bbox
 
+// Geometry the host tracks: the component's own size (bbox — what the canvas
+// fits to), the iframe element size (frame — grown to fit popovers), and where
+// #root sits inside the frame (offset). Resting: frame == bbox, offset == 0.
+interface FrameGeo {
+  bboxW: number
+  bboxH: number
+  frameW: number
+  frameH: number
+  offsetX: number
+  offsetY: number
+}
+
 const baseIframeStyle: CSSProperties = {
   display: "block",
   border: "none",
@@ -77,11 +89,18 @@ export function IframeMount({
   onError,
 }: IframeMountProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
-  const [bbox, setBbox] = useState<IframeBbox>({
-    width: INITIAL_W,
-    height: INITIAL_H,
+  const [geo, setGeo] = useState<FrameGeo>({
+    bboxW: INITIAL_W,
+    bboxH: INITIAL_H,
+    frameW: INITIAL_W,
+    frameH: INITIAL_H,
+    offsetX: 0,
+    offsetY: 0,
   })
   const [ready, setReady] = useState(false)
+  // The first non-zero fit (1×1 → bbox) must not animate; flips true after
+  // ready so later popover grow/shrink transitions smoothly.
+  const didFitRef = useRef(false)
   // Latest props in a ref so the message handler doesn't capture stale
   // closures, AND so `ready` can flush whatever the latest props are at the
   // moment the iframe finishes loading.
@@ -104,11 +123,20 @@ export function IframeMount({
       switch (m.kind) {
         case "ready": {
           setReady(true)
-          const clamped = clampBbox(m.bbox)
-          // Apply size (may be {0,0} if ready arrives pre-render — onBbox
-          // handler can decide; we keep iframe at 1x1 until non-zero).
-          if (clamped.width > 0 && clamped.height > 0) setBbox(clamped)
-          onBbox?.(clamped, "ready")
+          const b = clampBbox(m.bbox)
+          // May be {0,0} if ready arrives pre-render — keep the iframe at 1×1
+          // until the first non-zero size.
+          if (b.width > 0 && b.height > 0) {
+            setGeo({
+              bboxW: b.width,
+              bboxH: b.height,
+              frameW: b.width,
+              frameH: b.height,
+              offsetX: 0,
+              offsetY: 0,
+            })
+          }
+          onBbox?.(b, "ready")
           // Flush latest props as the init payload.
           postToIframe({
             v: IFRAME_PROTOCOL_VERSION,
@@ -118,9 +146,22 @@ export function IframeMount({
           break
         }
         case "resize": {
-          const clamped = clampBbox(m.bbox)
-          if (clamped.width > 0 && clamped.height > 0) setBbox(clamped)
-          onBbox?.(clamped, "resize")
+          const b = clampBbox(m.bbox)
+          if (b.width > 0 && b.height > 0) {
+            // frame/offset carry the overflow grow; absent → resting (frame ==
+            // bbox). Never let the frame be smaller than the component.
+            const fr = m.frame ? clampBbox(m.frame) : b
+            const off = m.offset ?? { x: 0, y: 0 }
+            setGeo({
+              bboxW: b.width,
+              bboxH: b.height,
+              frameW: Math.max(fr.width, b.width),
+              frameH: Math.max(fr.height, b.height),
+              offsetX: Math.max(0, off.x),
+              offsetY: Math.max(0, off.y),
+            })
+          }
+          onBbox?.(b, "resize")
           break
         }
         case "error":
@@ -164,14 +205,29 @@ export function IframeMount({
     }
   }, [instanceId, manifestId])
 
-  const iframeStyle = useMemo<CSSProperties>(
-    () => ({
+  // Once ready, allow size/transform transitions (the "flexbox-like" dynamic
+  // grow/shrink the owner asked for). The first fit (1×1 → bbox) stays instant.
+  useEffect(() => {
+    if (ready) didFitRef.current = true
+  }, [ready])
+
+  const iframeStyle = useMemo<CSSProperties>(() => {
+    // Keep #root visually pinned where the canvas placed it while the frame
+    // grows around it. The wrapper (stage-content) centers the grown frame on
+    // the anchor via translate(-50%,-50%); shift the iframe back by half the
+    // asymmetric growth minus the left/top pad so #root's center stays put.
+    const tx = (geo.frameW - geo.bboxW) / 2 - geo.offsetX
+    const ty = (geo.frameH - geo.bboxH) / 2 - geo.offsetY
+    return {
       ...baseIframeStyle,
-      width: `${bbox.width}px`,
-      height: `${bbox.height}px`,
-    }),
-    [bbox.width, bbox.height],
-  )
+      width: `${geo.frameW}px`,
+      height: `${geo.frameH}px`,
+      transform: `translate(${tx}px, ${ty}px)`,
+      transition: didFitRef.current
+        ? "width 140ms ease, height 140ms ease, transform 140ms ease"
+        : undefined,
+    }
+  }, [geo])
 
   return (
     <iframe
