@@ -1,6 +1,9 @@
 // Shallow-clone a GitHub repo at a specific commit using a fresh install
-// token. We use `git` via child_process.spawn rather than `simple-git` (no
-// new dep; git is on the worker container by definition).
+// token. We use `git` via child_process.spawn rather than `simple-git` (no new
+// dep). NOTE: git is NOT on a PaaS runtime image by default — that assumption
+// was the trap (every build silently failed `spawn git ENOENT`). The Railway
+// api service provisions it via the NIXPACKS_PKGS=git env var (migration-log
+// PR19 <live-debug>); a committed nixpacks.toml is the durable follow-up.
 //
 // Auth: x-access-token user with the installation token as password — works
 // in HTTPS clone URLs and rotates as soon as the App refreshes the token.

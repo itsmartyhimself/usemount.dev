@@ -23,7 +23,17 @@ import { webhookRoutes } from "./github/webhook.js"
 // server-to-server (browsers never call it), so CORS doesn't gate it.
 function corsMiddleware() {
   const webOrigin = process.env.WEB_ORIGIN?.trim()
-  if (!webOrigin) return cors()
+  if (!webOrigin) {
+    // Permissive is fine for local dev / the first deploy, but in production it
+    // means any origin can call the connect surface — surface that loudly so a
+    // public launch with WEB_ORIGIN unset is visible in the logs (0a finding).
+    if (process.env.NODE_ENV === "production") {
+      console.warn(
+        "[cors] WEB_ORIGIN unset in production — CORS is permissive (any origin). Set WEB_ORIGIN to the dashboard URL to lock down.",
+      )
+    }
+    return cors()
+  }
   const origins = webOrigin
     .split(",")
     .map((o) => o.trim())
