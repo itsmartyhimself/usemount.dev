@@ -239,9 +239,14 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
         className="max-w-[calc(100vw-32px)] gap-0 p-0 overflow-hidden rounded-[var(--radius-4)] border-[var(--color-border-primary)] bg-[var(--color-bg-elevated)] sm:max-w-none"
         style={contentStyle}
       >
-        {/* Header */}
+        {/* Header — flex column with a real gap. Margins between .text-trim
+            elements get eaten by the cap-height trim's negative pseudo-margins,
+            so a flex gap is the only reliable vertical rhythm here. */}
         <div
           style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--spacing-2)",
             padding: "var(--spacing-5) var(--spacing-5) var(--spacing-4)",
             borderBottom: "1px solid var(--color-border-primary)",
           }}
@@ -258,11 +263,7 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
           </DialogTitle>
           <p
             className="type-3 text-trim"
-            style={{
-              color: "var(--color-text-secondary)",
-              margin: 0,
-              marginTop: "var(--spacing-2)",
-            }}
+            style={{ color: "var(--color-text-secondary)", margin: 0 }}
           >
             Tick the folders to show in this preview. The selection{" "}
             <strong style={{ color: "var(--color-text-primary)" }}>
@@ -270,7 +271,6 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
             </strong>{" "}
             the current scope and overrides <code>mount.config.ts</code>.
           </p>
-          <CurrentScope tree={tree} />
         </div>
 
         {/* Body */}
@@ -370,30 +370,6 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
         ) : null}
       </DialogContent>
     </Dialog>
-  )
-}
-
-// "Currently previewing" line so the user understands what the selection
-// replaces. Shows the active override, else the mount.config/auto-detect dir.
-function CurrentScope({ tree }: { tree: RepoTreeResponse | null }) {
-  if (!tree) return null
-  const current =
-    tree.selectedDirs && tree.selectedDirs.length > 0
-      ? tree.selectedDirs.join(", ")
-      : tree.defaultScan
-        ? `${tree.defaultScan} (from mount.config.ts / auto-detect)`
-        : "auto-detect"
-  return (
-    <p
-      className="type-3 text-trim"
-      style={{
-        color: "var(--color-text-tertiary)",
-        margin: 0,
-        marginTop: "var(--spacing-2)",
-      }}
-    >
-      Currently previewing: {current}
-    </p>
   )
 }
 
