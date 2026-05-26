@@ -156,6 +156,30 @@ repoConnectionRoutes.post("/repo-connections", async (c) => {
     throw new HTTPException(500, { message: "Could not save the connection" })
   }
 
+  // Reconnect hygiene: the UNIQUE is (install, repo) — NOT (workspace, repo) —
+  // so a NEW install id for an already-connected repo INSERTs a fresh row and
+  // leaves the prior connection active=true (the uninstall webhook only fires
+  // if the old install was actually removed, which a re-configure doesn't do).
+  // Two active rows for one repo make the instance route's `.eq(active,true)`
+  // resolution nondeterministic — that was the live "Not Found" (PR19
+  // <live-debug>). Retire every OTHER connection for this (workspace, repo) so
+  // exactly one stays active: the one we just upserted.
+  const { error: retireErr } = await supabaseAdmin()
+    .from("repo_connections")
+    .update({ active: false })
+    .eq("workspace_id", workspaceId)
+    .eq("github_repo_id", githubRepoId)
+    .eq("active", true)
+    .neq("id", conn.id)
+  if (retireErr) {
+    // Non-fatal: the new connection is valid and active. A lingering active row
+    // is the pre-existing bug — no worse than before. Log, don't block connect.
+    console.error(
+      "[repo-connections] failed to retire prior connections:",
+      retireErr.message,
+    )
+  }
+
   // Default-pin: create instance rows (build_status defaults to 'queued' — the
   // build worker is Step 4). Always pin the default branch even if live-branch
   // enumeration fails, so the dashboard always has at least one instance row.
