@@ -8,7 +8,7 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/imports/shadcn/dialog"
-import { workspaceForRepo } from "@/lib/dashboard/demo"
+import { useWorkspaces } from "@/lib/dashboard/use-workspaces"
 import type { RepoConnection } from "@/lib/dashboard/types"
 import { SearchModalDefault } from "./search-modal-default"
 import { SearchModalInput } from "./search-modal-input"
@@ -38,6 +38,9 @@ const scrollRegionStyle: CSSProperties = {
 
 export function SearchModal({ open, onOpenChange }: SearchModalProps) {
   const router = useRouter()
+  // The search modal lives outside DashboardStateProvider, so it fetches its
+  // own workspaces to resolve each repo's owning workspace (chip + nav URL).
+  const workspaces = useWorkspaces()
   const [query, setQuery] = useState("")
   // Controlled cmdk selection: kept at "" until the user actually arrow-keys.
   // Without this, cmdk auto-selects the first row on mount AND any mouse hover
@@ -50,15 +53,17 @@ export function SearchModal({ open, onOpenChange }: SearchModalProps) {
     onOpenChange(false)
     setQuery("")
     setSelected("")
-    const workspace = workspaceForRepo(repo.id)
+    // "personal" is the least-wrong fallback if workspaces haven't loaded —
+    // parity with the old demo lookup, which returned the personal workspace
+    // for unknowns.
+    const workspace = workspaces.find((w) => w.id === repo.workspaceId)
     const primaryBranch =
       repo.branches.find((b) => b.primary)?.name ??
       repo.branches[0]?.name ??
       "main"
     const repoName = repo.orgRepo.split("/")[1]
-    router.push(
-      `/${workspace.name.toLowerCase()}/${repoName}/${primaryBranch}`,
-    )
+    const wsName = (workspace?.name ?? "personal").toLowerCase()
+    router.push(`/${wsName}/${repoName}/${primaryBranch}`)
   }
 
   const handleOpenChange = (next: boolean) => {
@@ -88,9 +93,13 @@ export function SearchModal({ open, onOpenChange }: SearchModalProps) {
           <SearchModalInput value={query} onValueChange={setQuery} />
           <div style={scrollRegionStyle} onMouseLeave={() => setSelected("")}>
             {trimmed.length === 0 ? (
-              <SearchModalDefault onSelect={handleSelect} />
+              <SearchModalDefault onSelect={handleSelect} workspaces={workspaces} />
             ) : (
-              <SearchModalResults query={query} onSelect={handleSelect} />
+              <SearchModalResults
+                query={query}
+                onSelect={handleSelect}
+                workspaces={workspaces}
+              />
             )}
           </div>
         </Command>

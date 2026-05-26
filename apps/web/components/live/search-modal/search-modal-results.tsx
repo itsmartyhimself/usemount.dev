@@ -5,11 +5,12 @@ import { Command } from "cmdk"
 import { RepoRow } from "@/components/live/repo-row"
 import { Skeleton } from "@/components/imports/shadcn/skeleton"
 import { useRepoSearch } from "@/lib/dashboard/use-repo-search"
-import type { RepoConnection } from "@/lib/dashboard/types"
+import type { RepoConnection, Workspace } from "@/lib/dashboard/types"
 
 interface SearchModalResultsProps {
   query: string
   onSelect: (repo: RepoConnection) => void
+  workspaces: Workspace[]
 }
 
 const containerStyle: CSSProperties = {
@@ -43,7 +44,11 @@ const emptyStyle: CSSProperties = {
 
 const SKELETON_BG = "!bg-[var(--color-bg-tertiary)]"
 
-export function SearchModalResults({ query, onSelect }: SearchModalResultsProps) {
+export function SearchModalResults({
+  query,
+  onSelect,
+  workspaces,
+}: SearchModalResultsProps) {
   const { state, data } = useRepoSearch(query)
 
   // While the hold timer is still running we keep showing the skeleton — every
@@ -97,6 +102,7 @@ export function SearchModalResults({ query, onSelect }: SearchModalResultsProps)
         >
           <RepoRow
             repo={repo}
+            workspace={workspaces.find((w) => w.id === repo.workspaceId)}
             expanded={false}
             onToggleExpanded={() => {}}
             showChevron={false}

@@ -1,11 +1,10 @@
 "use client"
 
 import { RepoCard } from "@/components/live/repo-card"
-import { DEMO_REPOS, workspaceForRepo } from "@/lib/dashboard/demo"
 import { useDashboardState } from "@/lib/dashboard/state"
 
 export function RecentRepos() {
-  const { recentRepos } = useDashboardState()
+  const { recentRepos, repos, workspaces } = useDashboardState()
 
   if (recentRepos.length === 0) return null
 
@@ -42,9 +41,13 @@ export function RecentRepos() {
         }}
       >
         {recentRepos.map((rr) => {
-          const repo = DEMO_REPOS.find((r) => r.id === rr.repoId)
+          // Real data from state (was DEMO_REPOS, which never matched the live
+          // UUIDs → cards rendered blank). repos + workspaces come from the
+          // same Supabase fetch as recentRepos.
+          const repo = repos.find((r) => r.id === rr.repoId)
           if (!repo) return null
-          const ws = workspaceForRepo(repo.id)
+          const ws = workspaces.find((w) => w.id === repo.workspaceId)
+          if (!ws) return null
           const primaryBranch =
             repo.branches.find((b) => b.primary)?.name ??
             repo.branches[0]?.name ??

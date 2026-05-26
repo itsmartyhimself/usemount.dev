@@ -4,10 +4,11 @@ import { type CSSProperties } from "react"
 import { Command } from "cmdk"
 import { RepoRow } from "@/components/live/repo-row"
 import { useRecentRepos } from "@/lib/dashboard/use-recent-repos"
-import type { RepoConnection } from "@/lib/dashboard/types"
+import type { RepoConnection, Workspace } from "@/lib/dashboard/types"
 
 interface SearchModalDefaultProps {
   onSelect: (repo: RepoConnection) => void
+  workspaces: Workspace[]
 }
 
 const containerStyle: CSSProperties = {
@@ -24,7 +25,7 @@ const headerStyle: CSSProperties = {
   color: "var(--color-text-tertiary)",
 }
 
-export function SearchModalDefault({ onSelect }: SearchModalDefaultProps) {
+export function SearchModalDefault({ onSelect, workspaces }: SearchModalDefaultProps) {
   const recent = useRecentRepos(3)
 
   return (
@@ -41,6 +42,7 @@ export function SearchModalDefault({ onSelect }: SearchModalDefaultProps) {
         >
           <RepoRow
             repo={repo}
+            workspace={workspaces.find((w) => w.id === repo.workspaceId)}
             expanded={false}
             onToggleExpanded={() => {}}
             showChevron={false}

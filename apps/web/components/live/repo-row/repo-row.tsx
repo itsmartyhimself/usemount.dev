@@ -21,16 +21,15 @@ import { StatusDot } from "@/components/live/status-dot"
 import { WorkspaceChip } from "@/components/live/workspace-chip"
 import { ROW_SPRING } from "@/components/live/row/row.config"
 import { formatRelativeTimeShort } from "@/lib/time/relative"
-import { workspaceForRepo } from "@/lib/dashboard/demo"
 import type { RepoConnection, RepoStatus, Workspace } from "@/lib/dashboard/types"
 
 interface RepoRowProps {
   repo: RepoConnection
-  // Real owning workspace, resolved by the dashboard caller from state. Drives
-  // the "open repo" link's workspace segment + the WorkspaceChip. Optional: the
-  // passive search-modal rows (no nav, chip only) render outside the dashboard
-  // state provider and fall back to the demo lookup below. Once the demo module
-  // is retired, the search modals should resolve + pass this too.
+  // Real owning workspace, resolved by the caller from state (dashboard) or a
+  // useWorkspaces() fetch (search modal). Drives the "open repo" link's
+  // workspace segment + the WorkspaceChip. Optional: undefined briefly while the
+  // search modal's workspaces are still loading, so both the chip and the nav
+  // URL degrade gracefully below.
   workspace?: Workspace
   expanded: boolean
   // When another row in the list is the active surface (its parent repo is
@@ -88,9 +87,7 @@ function RepoRowBase(
   ref: Ref<HTMLDivElement>,
 ) {
   const router = useRouter()
-  // Prefer the real workspace passed by the dashboard; fall back to the demo
-  // lookup for callers that don't provide one (passive search-modal rows).
-  const workspace = workspaceProp ?? workspaceForRepo(repo.id)
+  const workspace = workspaceProp
   const primaryBranch =
     repo.branches.find((b) => b.primary)?.name ?? repo.branches[0]?.name ?? "main"
 
@@ -221,7 +218,7 @@ function RepoRowBase(
               size={24}
               bordered={false}
               onClick={() =>
-                router.push(`/${workspace.name.toLowerCase()}/${repo.orgRepo.split("/")[1]}/${primaryBranch}`)
+                router.push(`/${(workspace?.name ?? "personal").toLowerCase()}/${repo.orgRepo.split("/")[1]}/${primaryBranch}`)
               }
             />
             <IconButton
@@ -272,7 +269,7 @@ function RepoRowBase(
             <Renew size={14} />
           </span>
         ) : null}
-        <WorkspaceChip workspace={workspace} />
+        {workspace ? <WorkspaceChip workspace={workspace} /> : null}
       </div>
     </div>
   )
