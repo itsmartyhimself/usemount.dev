@@ -1,6 +1,9 @@
 {
   "$schema": "https://schema.railpack.com",
   "deploy": {
-    "aptPackages": ["git"]
+    "aptPackages": ["git"],
+    "variables": {
+      "NODE_OPTIONS": "--max-old-space-size=4096"
+    }
   }
 }
