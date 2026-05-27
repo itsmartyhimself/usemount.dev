@@ -37,9 +37,7 @@ function isUnsupported(body: unknown): body is UnsupportedResponse {
   return b.kind === "unsupported" && Array.isArray(b.violations)
 }
 
-// Multi-line D5 copy (migration-plan Step 5.1 §D5). One line per violation:
-// "Required: <required> (you have <found>)" or "Required: <required>
-// (missing)" / "(couldn't parse <found>)" depending on reason.
+// D5 copy per migration-plan Step 5.1 §D5 — one line per violation.
 function formatUnsupported(body: UnsupportedResponse): string {
   const lines = ["This repo isn't supported yet.", "", "usemount.dev requires:"]
   for (const v of body.violations) {

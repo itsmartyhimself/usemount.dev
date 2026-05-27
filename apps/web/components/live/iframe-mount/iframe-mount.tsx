@@ -134,7 +134,6 @@ export function IframeMount({
             })
           }
           onBbox?.(b, "ready")
-          // Flush latest props as the init payload.
           postToIframe({
             v: IFRAME_PROTOCOL_VERSION,
             kind: "init",

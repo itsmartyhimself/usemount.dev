@@ -236,7 +236,6 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
       setBuildPhase("succeeded")
       setProgress(100)
       setProgressTransition({ type: "spring", stiffness: 200, damping: 28 })
-      // Hold the full bar briefly, reseed the sidebar, then dismiss.
       window.setTimeout(() => {
         void actions.reseed().finally(() => {
           actions.setBuilding(false)
@@ -436,7 +435,6 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
           </p>
         </div>
 
-        {/* Body — dimmed + inert while a rebuild is running. */}
         <div
           style={{
             ...scrollStyle,
@@ -480,7 +478,6 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
           ) : null}
         </div>
 
-        {/* Footer — build session (progress / error) takes over when live. */}
         <div
           style={{
             padding: "var(--spacing-4) var(--spacing-5)",
@@ -677,7 +674,6 @@ function PickerRow({
           if (!includedByParent) onToggleSelected(node.path)
         }}
       >
-        {/* expand/collapse */}
         <button
           type="button"
           aria-label={isOpen ? "Collapse" : "Expand"}
@@ -703,7 +699,6 @@ function PickerRow({
           {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         </button>
 
-        {/* checkbox */}
         <span
           aria-hidden
           style={{

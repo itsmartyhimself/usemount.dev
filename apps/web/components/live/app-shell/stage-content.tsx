@@ -118,7 +118,6 @@ export function StageContent({ selected }: StageContentProps) {
       ? manifest
       : null
 
-  // Reset the fit-tracking AND any prior error when the selection changes.
   useLayoutEffect(() => {
     fittedForIdRef.current = null
     setIframeError(null)

@@ -1,9 +1,7 @@
 "use client"
 
-// Token-styled determinate progress bar. Wraps the imports/ primitive and applies
-// all visuals via semantic tokens (recessed track + high-contrast ink/white fill),
-// so it reads correctly in light and dark. Layout/behavior via Tailwind; color,
-// radius, and height via var() per the token rules.
+// Token-styled determinate progress bar — recessed track + high-contrast fill
+// so it reads correctly in light and dark.
 
 import { type CSSProperties } from "react"
 import { useReducedMotion, type Transition } from "framer-motion"
