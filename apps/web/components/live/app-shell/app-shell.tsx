@@ -61,6 +61,7 @@ export function AppShell({
     <ToastProvider>
       <CanvasViewProvider>
         <SidebarPanelProvider
+          instanceId={instance?.instanceId}
           initialRegistry={initialRegistry}
           initialManifests={initialManifests}
         >

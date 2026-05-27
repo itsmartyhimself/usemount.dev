@@ -95,6 +95,7 @@ export async function GET(
 
   let bundleUrl: string
   let perComponentCssUrl: string | null = null
+  let perPreviewCssUrl: string | null = null
   let globalsCssUrl: string | null = null
   let providersUrl: string | null = null
   let previewUrl: string | null = null
@@ -107,6 +108,14 @@ export async function GET(
         previewUrl = await signStoragePath(row.preview_artifact_url)
       } catch {
         previewUrl = null
+      }
+      // PR22 — the example's own CSS sits at the .css sibling of the preview
+      // JS key (no DB column). Sign-if-exists: old bundles 404 → null.
+      const previewCssKey = row.preview_artifact_url.replace(/\.js$/, ".css")
+      try {
+        perPreviewCssUrl = await signStoragePath(previewCssKey)
+      } catch {
+        perPreviewCssUrl = null
       }
     }
     if (row.source_hash) {
@@ -132,6 +141,7 @@ export async function GET(
     title: row.title ?? row.slug,
     bundleUrl,
     perComponentCssUrl,
+    perPreviewCssUrl,
     globalsCssUrl,
     providersUrl,
     previewUrl,

@@ -384,6 +384,18 @@ async function processJob(
               sourceHash: previewHash,
               bytes: previewBundle.jsBytes,
             })
+            // Upload the example's own CSS so an example importing styles the
+            // bare component doesn't (a composite's layout/theme) renders
+            // correctly. Sibling key of the preview JS (.css) — the route
+            // derives it from preview_artifact_url, so no DB column is needed.
+            if (previewBundle.cssBytes) {
+              await uploadCss({
+                instanceId: instance.id,
+                slug: `${slug}.preview`,
+                sourceHash: previewHash,
+                bytes: previewBundle.cssBytes,
+              })
+            }
             console.log(`[worker:${workerId}] preview example bundled (${slug})`)
           } catch (e) {
             const msg = (e as Error).message

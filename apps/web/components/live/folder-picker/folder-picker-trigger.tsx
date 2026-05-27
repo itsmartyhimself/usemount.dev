@@ -5,7 +5,7 @@
 // AppShell and reads pickerOpen). Collapses to an icon-only button on the rail.
 
 import { useState, type CSSProperties } from "react"
-import { Folders } from "@carbon/icons-react"
+import { Folders, InProgress } from "@carbon/icons-react"
 import { useSidebarPanel } from "@/components/live/sidebar-panel/use-sidebar-panel"
 
 // Mirrors the size-32 sidebar Row (row.config.ts) so the trigger reads as one
@@ -32,8 +32,12 @@ function buttonStyle(collapsed: boolean, hovered: boolean): CSSProperties {
 }
 
 export function FolderPickerTrigger() {
-  const { actions, collapsed } = useSidebarPanel()
+  const { actions, collapsed, building } = useSidebarPanel()
   const [hovered, setHovered] = useState(false)
+
+  // While a (possibly detached) rebuild is running, the trigger becomes a live
+  // "Building…" pill — still clickable to reopen the modal and watch progress.
+  const label = building ? "Building…" : "Choose folders"
 
   return (
     <button
@@ -41,14 +45,21 @@ export function FolderPickerTrigger() {
       onClick={() => actions.openPicker()}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={buttonStyle(collapsed, hovered)}
-      aria-label="Choose folders to preview"
-      title="Choose folders to preview"
+      style={{
+        ...buttonStyle(collapsed, hovered),
+        ...(building ? { color: "var(--color-text-primary)" } : null),
+      }}
+      aria-label={building ? "Rebuilding — open to view progress" : "Choose folders to preview"}
+      title={building ? "Rebuilding…" : "Choose folders to preview"}
     >
-      <Folders size={16} style={{ flexShrink: 0 }} />
-      {!collapsed ? (
-        <span className="type-4">Choose folders</span>
-      ) : null}
+      {building ? (
+        <span className="icon-spin" style={{ display: "inline-flex", flexShrink: 0 }}>
+          <InProgress size={16} />
+        </span>
+      ) : (
+        <Folders size={16} style={{ flexShrink: 0 }} />
+      )}
+      {!collapsed ? <span className="type-4">{label}</span> : null}
     </button>
   )
 }

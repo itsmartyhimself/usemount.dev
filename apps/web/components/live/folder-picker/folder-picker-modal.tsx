@@ -15,10 +15,12 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
 } from "react"
 import { Checkmark, ChevronDown, ChevronRight, Folder } from "@carbon/icons-react"
+import type { Transition } from "framer-motion"
 import {
   Dialog,
   DialogContent,
@@ -32,6 +34,8 @@ import {
   type RepoTreeResponse,
 } from "@/lib/api/client"
 import { useSidebarPanel } from "@/components/live/sidebar-panel/use-sidebar-panel"
+import { useToast } from "@/components/live/toast"
+import { ProgressBar } from "@/components/live/progress/progress-bar"
 
 interface TreeNode extends RepoTreeDir {
   name: string
@@ -76,7 +80,48 @@ function hasSelectedAncestor(path: string, selected: Set<string>): boolean {
   return false
 }
 
-type SaveState = "idle" | "saving" | "rebuilding" | "build-error"
+// "saving" = the PATCH that persists the scope + enqueues the build is in
+// flight. Once it lands, the build SESSION (below) takes over.
+type SaveState = "idle" | "saving"
+
+// Build session phases. `queued`→`building`→`finishing`/`overrun` track a live
+// rebuild; `succeeded`/`failed` are terminal. The session is independent of the
+// modal being open — closing the modal mid-build detaches the UI but the
+// session keeps tracking so the sidebar still reseeds and the trigger shows a
+// "Building…" pill.
+type BuildPhase =
+  | "queued"
+  | "building"
+  | "finishing"
+  | "overrun"
+  | "succeeded"
+  | "failed"
+
+const BUILD_ACTIVE_PHASES: ReadonlySet<BuildPhase> = new Set([
+  "queued",
+  "building",
+  "finishing",
+  "overrun",
+])
+
+// Fallback when an instance has no prior successful build to estimate from.
+const DEFAULT_ESTIMATE_MS = 45_000
+// The running bar glides toward this ceiling over the estimated build time and
+// holds here until the real terminal status snaps it to 100 — so it never
+// claims "done" before the build actually is.
+const RUNNING_CEILING = 92
+const POLL_INTERVAL_MS = 2_000
+// How long to hold the full bar so the user sees 100% before the modal closes.
+const SETTLE_MS = 700
+
+const PHASE_LABEL: Record<BuildPhase, string> = {
+  queued: "Queued…",
+  building: "Rebuilding…",
+  finishing: "Finishing up…",
+  overrun: "Taking longer than usual…",
+  succeeded: "Done",
+  failed: "Build failed",
+}
 
 const contentStyle: CSSProperties = {
   width: "min(560px, calc(100vw - 32px))",
@@ -95,15 +140,40 @@ const scrollStyle: CSSProperties = {
 
 export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
   const { pickerOpen, actions } = useSidebarPanel()
+  const { showToast } = useToast()
 
   const [tree, setTree] = useState<RepoTreeResponse | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [saveState, setSaveState] = useState<SaveState>("idle")
+
+  // Build session — survives a modal close (detach). `buildPhase` is only
+  // meaningful while a session is live (terminal phases linger to show the
+  // result/error). `progress`/`progressTransition` drive the bar.
+  const [buildPhase, setBuildPhase] = useState<BuildPhase | null>(null)
+  const [progress, setProgress] = useState(0)
+  const [progressTransition, setProgressTransition] = useState<
+    Transition | undefined
+  >(undefined)
   const [buildError, setBuildError] = useState<string | null>(null)
 
-  // Fetch the repo tree on open; reset everything on close.
+  const buildActive = buildPhase !== null && BUILD_ACTIVE_PHASES.has(buildPhase)
+
+  // Estimate (last successful build's duration), whether the running bar has
+  // started its time-glide, terminal latch, and the freshest pickerOpen — all
+  // in refs so the poll closure stays stable across renders.
+  const estimateRef = useRef(DEFAULT_ESTIMATE_MS)
+  const glideStartedRef = useRef(false)
+  const terminalRef = useRef(false)
+  const pickerOpenRef = useRef(pickerOpen)
+  pickerOpenRef.current = pickerOpen
+  const buildActiveRef = useRef(buildActive)
+  buildActiveRef.current = buildActive
+
+  // Fetch the repo tree on open; reset the VIEW on close. The build session is
+  // NOT reset here when it's still active (detach keeps it tracking); a TERMINAL
+  // session is cleared so a stale result/error doesn't reappear on reopen.
   useEffect(() => {
     if (!pickerOpen) {
       setTree(null)
@@ -111,7 +181,10 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
       setSelected(new Set())
       setExpanded(new Set())
       setSaveState("idle")
-      setBuildError(null)
+      if (!buildActiveRef.current) {
+        setBuildPhase(null)
+        setBuildError(null)
+      }
       return
     }
     if (!instanceId) {
@@ -146,37 +219,94 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
     }
   }, [pickerOpen, instanceId])
 
-  // While rebuilding, poll the latest build_jobs row (RLS lets a member read it).
-  // build_jobs is the reliable terminal signal — the worker only flips
-  // instances.build_status to 'succeeded', never 'failed'. On success reload so
-  // the server re-renders the new sidebar; on failure surface the error.
+  // Poll build_jobs while a session is live. build_jobs is the authoritative
+  // terminal signal (the worker only flips instances.build_status to
+  // 'succeeded', never 'failed'). The running bar glides toward RUNNING_CEILING
+  // over the estimated duration and snaps to 100 on success; success reseeds
+  // the sidebar in place (no full-page reload). Keyed on buildActive so it
+  // keeps running after a detach (modal closed) until the build resolves.
   useEffect(() => {
-    if (saveState !== "rebuilding" || !instanceId) return
+    if (!buildActive || !instanceId) return
     const supabase = createSupabaseBrowserClient()
     let active = true
+
+    const finishSuccess = () => {
+      if (terminalRef.current) return
+      terminalRef.current = true
+      setBuildPhase("succeeded")
+      setProgress(100)
+      setProgressTransition({ type: "spring", stiffness: 200, damping: 28 })
+      // Hold the full bar briefly, reseed the sidebar, then dismiss.
+      window.setTimeout(() => {
+        void actions.reseed().finally(() => {
+          actions.setBuilding(false)
+          glideStartedRef.current = false
+          setBuildPhase(null)
+          if (pickerOpenRef.current) actions.closePicker()
+        })
+      }, SETTLE_MS)
+    }
+
+    const finishFailure = (message: string | null) => {
+      if (terminalRef.current) return
+      terminalRef.current = true
+      glideStartedRef.current = false
+      actions.setBuilding(false)
+      setBuildError(message || "The build failed.")
+      setBuildPhase("failed")
+      // Detached (modal closed) → the inline error isn't visible; toast it.
+      if (!pickerOpenRef.current) {
+        showToast({ tone: "error", title: message || "Rebuild failed" })
+      }
+    }
+
     const tick = async () => {
+      if (terminalRef.current) return
       const { data } = await supabase
         .from("build_jobs")
-        .select("status, error, created_at")
+        .select("status, error, started_at, created_at")
         .eq("instance_id", instanceId)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle()
       if (!active || !data) return
-      if (data.status === "succeeded") {
-        window.location.reload()
-      } else if (data.status === "failed" || data.status === "canceled") {
-        setBuildError((data.error as string | null) || "The build failed.")
-        setSaveState("build-error")
+      if (data.status === "succeeded") return finishSuccess()
+      if (data.status === "failed" || data.status === "canceled") {
+        return finishFailure((data.error as string | null) ?? null)
+      }
+      if (data.status === "running") {
+        const startedAt = data.started_at
+          ? new Date(data.started_at as string).getTime()
+          : Date.now()
+        const elapsed = Math.max(0, Date.now() - startedAt)
+        const est = estimateRef.current
+        // Start the time-glide once: animate to the ceiling over the remaining
+        // estimated time. Later renders don't restart it (value stays put).
+        if (!glideStartedRef.current) {
+          glideStartedRef.current = true
+          const remaining = Math.max(2_000, est - elapsed)
+          setProgress(RUNNING_CEILING)
+          setProgressTransition({ duration: remaining / 1000, ease: "linear" })
+        }
+        setBuildPhase(
+          elapsed > est
+            ? "overrun"
+            : elapsed > est * 0.8
+              ? "finishing"
+              : "building",
+        )
+      } else {
+        setBuildPhase("queued")
       }
     }
+
     void tick()
-    const iv = setInterval(() => void tick(), 2500)
+    const iv = setInterval(() => void tick(), POLL_INTERVAL_MS)
     return () => {
       active = false
       clearInterval(iv)
     }
-  }, [saveState, instanceId])
+  }, [buildActive, instanceId, actions, showToast])
 
   const roots = useMemo(() => (tree ? buildTree(tree.dirs) : []), [tree])
 
@@ -212,20 +342,53 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
     setBuildError(null)
     const dirs = [...selected]
     try {
-      await pickerApi.setPreviewDirs(instanceId, dirs.length > 0 ? dirs : null)
-      setSaveState("rebuilding")
+      const res = await pickerApi.setPreviewDirs(
+        instanceId,
+        dirs.length > 0 ? dirs : null,
+      )
+      setSaveState("idle")
+      if (res.status === "deduped") {
+        // Scope unchanged / commit already built — nothing to rebuild.
+        actions.closePicker()
+        return
+      }
+      // Begin a fresh build session.
+      terminalRef.current = false
+      glideStartedRef.current = false
+      estimateRef.current = DEFAULT_ESTIMATE_MS
+      setBuildError(null)
+      setProgress(6)
+      setProgressTransition({ duration: 0.4, ease: "easeOut" })
+      setBuildPhase("queued")
+      actions.setBuilding(true)
+      // Refine the estimate from this instance's last successful build.
+      void (async () => {
+        const supabase = createSupabaseBrowserClient()
+        const { data } = await supabase
+          .from("build_jobs")
+          .select("build_duration_ms")
+          .eq("instance_id", instanceId)
+          .eq("status", "succeeded")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        const ms = data?.build_duration_ms as number | null | undefined
+        if (ms && ms > 0) estimateRef.current = ms
+      })()
     } catch (e) {
+      setSaveState("idle")
       setBuildError(
         e instanceof ApiError ? e.message : "Couldn't save the selection.",
       )
-      setSaveState("build-error")
+      setBuildPhase("failed")
     }
-  }, [instanceId, selected])
+  }, [instanceId, selected, actions])
 
-  const busy = saveState === "saving" || saveState === "rebuilding"
+  const saving = saveState === "saving"
 
+  // Closing any time is allowed — closing mid-build DETACHES: the build keeps
+  // running, the sidebar reseeds when it lands, and the trigger shows a pill.
   const handleOpenChange = (next: boolean) => {
-    if (busy) return // don't let the user close mid-rebuild
     if (!next) actions.closePicker()
   }
 
@@ -273,8 +436,15 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
           </p>
         </div>
 
-        {/* Body */}
-        <div style={scrollStyle}>
+        {/* Body — dimmed + inert while a rebuild is running. */}
+        <div
+          style={{
+            ...scrollStyle,
+            ...(buildActive
+              ? { opacity: 0.5, pointerEvents: "none" as const }
+              : null),
+          }}
+        >
           {loadError ? (
             <StatusText tone="error">{loadError}</StatusText>
           ) : !tree ? (
@@ -310,64 +480,117 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
           ) : null}
         </div>
 
-        {/* Footer */}
+        {/* Footer — build session (progress / error) takes over when live. */}
         <div
           style={{
             padding: "var(--spacing-4) var(--spacing-5)",
             borderTop: "1px solid var(--color-border-primary)",
             display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "var(--spacing-4)",
+            flexDirection: "column",
+            gap: "var(--spacing-3)",
           }}
         >
-          <span
-            className="type-3 text-trim"
-            style={{ color: "var(--color-text-tertiary)" }}
-          >
-            {saveState === "rebuilding"
-              ? "Rebuilding — the sidebar refreshes when it's done."
-              : buildError
-                ? ""
-                : `${selectedCount} folder${selectedCount === 1 ? "" : "s"} selected`}
-          </span>
-          <div style={{ display: "flex", gap: "var(--spacing-2)" }}>
-            <button
-              type="button"
-              onClick={() => actions.closePicker()}
-              disabled={busy}
-              className="type-4"
-              style={secondaryBtn(busy)}
+          {buildPhase ? (
+            <>
+              {buildPhase !== "failed" ? (
+                <ProgressBar value={progress} transition={progressTransition} />
+              ) : null}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "var(--spacing-4)",
+                }}
+              >
+                <span
+                  className="type-3"
+                  style={{
+                    color:
+                      buildPhase === "failed"
+                        ? "var(--color-text-secondary)"
+                        : "var(--color-text-tertiary)",
+                    minWidth: 0,
+                    flex: 1,
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {buildPhase === "failed"
+                    ? buildError || PHASE_LABEL.failed
+                    : PHASE_LABEL[buildPhase]}
+                </span>
+                <div style={{ display: "flex", gap: "var(--spacing-2)", flexShrink: 0 }}>
+                  {buildPhase === "failed" ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => actions.closePicker()}
+                        className="type-4"
+                        style={secondaryBtn(false)}
+                      >
+                        Close
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSave}
+                        disabled={!tree || !!loadError}
+                        className="type-4"
+                        style={primaryBtn(!tree || !!loadError)}
+                      >
+                        Try again
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => actions.closePicker()}
+                      className="type-4"
+                      style={secondaryBtn(false)}
+                    >
+                      Hide
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "var(--spacing-4)",
+              }}
             >
-              {saveState === "build-error" ? "Close" : "Cancel"}
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={busy || !tree || !!loadError}
-              className="type-4"
-              style={primaryBtn(busy || !tree || !!loadError)}
-            >
-              {saveState === "saving"
-                ? "Saving…"
-                : saveState === "rebuilding"
-                  ? "Rebuilding…"
-                  : "Save & rebuild"}
-            </button>
-          </div>
+              <span
+                className="type-3 text-trim"
+                style={{ color: "var(--color-text-tertiary)" }}
+              >
+                {`${selectedCount} folder${selectedCount === 1 ? "" : "s"} selected`}
+              </span>
+              <div style={{ display: "flex", gap: "var(--spacing-2)" }}>
+                <button
+                  type="button"
+                  onClick={() => actions.closePicker()}
+                  disabled={saving}
+                  className="type-4"
+                  style={secondaryBtn(saving)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving || !tree || !!loadError}
+                  className="type-4"
+                  style={primaryBtn(saving || !tree || !!loadError)}
+                >
+                  {saving ? "Saving…" : "Save & rebuild"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-        {buildError ? (
-          <div
-            className="type-3 text-trim"
-            style={{
-              padding: "0 var(--spacing-5) var(--spacing-4)",
-              color: "var(--color-text-secondary)",
-              wordBreak: "break-word",
-            }}
-          >
-            {buildError}
-          </div>
-        ) : null}
       </DialogContent>
     </Dialog>
   )

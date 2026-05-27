@@ -11,6 +11,12 @@ export interface RenderIframeOpts {
   bundleUrl: string
   /** Signed Storage URL for per-component CSS, if the bundle emitted one. */
   perComponentCssUrl: string | null
+  /**
+   * PR22 — signed Storage URL for the preview EXAMPLE's own CSS, if it emitted
+   * one. Loaded last so the example's styles win. Null when there's no preview
+   * example or it produced no CSS (old bundles omit it — backward compatible).
+   */
+  perPreviewCssUrl: string | null
   /** Signed Storage URL for the instance globals.css, if uploaded. */
   globalsCssUrl: string | null
   /**
@@ -72,6 +78,13 @@ function jsonForScript(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c")
 }
 
+// PR22 — room reserved on every side of #root (inside #frame) so an overlay
+// that opens ABOVE/LEFT of #root has document space to render into; the iframe
+// is a hard clip boundary, so without this the upward/leftward popover is cut
+// off. At rest the wrapper transform cancels the reserve exactly (#root back at
+// the viewport origin), so resting + down/right behavior is unchanged.
+const OVERFLOW_RESERVE = 480
+
 export function renderIframeHtml(opts: RenderIframeOpts): string {
   const titleSafe = escapeHtml(opts.title)
   const links: string[] = []
@@ -81,6 +94,12 @@ export function renderIframeHtml(opts: RenderIframeOpts): string {
   if (opts.perComponentCssUrl) {
     links.push(
       `<link rel="stylesheet" href="${escapeAttr(opts.perComponentCssUrl)}">`,
+    )
+  }
+  // Preview-example CSS loads last so it wins when the example is rendered.
+  if (opts.perPreviewCssUrl) {
+    links.push(
+      `<link rel="stylesheet" href="${escapeAttr(opts.perPreviewCssUrl)}">`,
     )
   }
 
@@ -125,6 +144,7 @@ const COMPONENT_URL = PREVIEW_URL || BUNDLE_URL
 const PROVIDERS_URL = ${jsonForScript(opts.providersUrl)}
 
 const rootEl = document.getElementById("root")
+const frameEl = document.getElementById("frame")
 const root = createRoot(rootEl)
 let Component = null
 let Providers = null
@@ -205,13 +225,13 @@ window.addEventListener("message", (event) => {
 // We target the Radix Popper wrapper + ARIA roles — NOT every body node — so a
 // full-viewport dismiss layer can't inflate the union into a feedback loop.
 //
-// bbox stays the component's own size so the canvas never zooms. #root is glued
-// to the iframe's top-left (body margin:0) and Floating UI keeps content inside
-// the viewport (origin = #root's corner), so the union only ever extends
-// DOWN/RIGHT — offset is therefore always {0,0} and the host's (frame-bbox)/2
-// shift pins #root. (No pre-grow: it would have to lie about the offset and
-// bounce the component for a frame. If a popover bigger than the resting
-// viewport ever needs room ABOVE/LEFT, push #root with body padding — PR21.)
+// bbox stays the component's own size so the canvas never zooms. PR22: #root
+// sits inside #frame, which reserves OVERFLOW_RESERVE px on every side and
+// cancels it with a translate so #root rests at the iframe's top-left — offset
+// stays {0,0} and DOWN/RIGHT behaves exactly as before. When an overlay extends
+// ABOVE/LEFT, syncFrame raises the wrapper's --ax/--ay (monotonic, capped at the
+// reserve to bound any reposition feedback) to shift #root down/right and reveal
+// it, and reports a non-zero offset so the host re-pins #root.
 const OVERLAY_SELECTOR = "[data-radix-popper-content-wrapper],[data-floating-ui-portal],[role=tooltip],[role=menu],[role=listbox],[role=dialog]"
 
 function measureFrame() {
@@ -252,6 +272,14 @@ function postFrame(bbox, frame, offset) {
 // close. Converges in ~1 frame and stays put.
 let openW = 0
 let openH = 0
+let openOffX = 0
+let openOffY = 0
+const RESERVE = ${OVERFLOW_RESERVE}
+function applyAnchor(ax, ay) {
+  if (!frameEl) return
+  frameEl.style.setProperty("--ax", ax + "px")
+  frameEl.style.setProperty("--ay", ay + "px")
+}
 let rafId = 0
 function syncFrame() {
   rafId = 0
@@ -259,10 +287,18 @@ function syncFrame() {
   if (m.hasOverlay) {
     if (m.frame.width > openW) openW = m.frame.width
     if (m.frame.height > openH) openH = m.frame.height
-    postFrame(m.bbox, { width: openW, height: openH }, m.offset)
+    // Monotonic offsets, capped at the reserve so a body-portaled popover that
+    // doesn't move with #frame can't drive an unbounded shift loop.
+    openOffX = Math.min(RESERVE, Math.max(openOffX, m.offset.x))
+    openOffY = Math.min(RESERVE, Math.max(openOffY, m.offset.y))
+    applyAnchor(openOffX, openOffY)
+    postFrame(m.bbox, { width: openW, height: openH }, { x: openOffX, y: openOffY })
   } else {
     openW = 0
     openH = 0
+    openOffX = 0
+    openOffY = 0
+    applyAnchor(0, 0)
     postFrame(m.bbox, m.bbox, { x: 0, y: 0 })
   }
 }
@@ -319,14 +355,19 @@ window.addEventListener("unhandledrejection", (event) => {
 <meta charset="utf-8">
 <title>${titleSafe} preview</title>
 <style nonce="${opts.nonce}">
-html, body { margin: 0; padding: 0; background: transparent; color-scheme: light dark; }
+html, body { margin: 0; padding: 0; background: transparent; color-scheme: light dark; overflow: hidden; }
+#frame {
+  width: max-content;
+  padding: ${OVERFLOW_RESERVE}px;
+  transform: translate(calc(var(--ax, 0px) - ${OVERFLOW_RESERVE}px), calc(var(--ay, 0px) - ${OVERFLOW_RESERVE}px));
+}
 #root { display: inline-block; vertical-align: top; }
 </style>
 ${links.join("\n")}
 <script type="importmap" nonce="${opts.nonce}">${importmap}</script>
 </head>
 <body>
-<div id="root"></div>
+<div id="frame"><div id="root"></div></div>
 <script type="module" nonce="${opts.nonce}">${bootstrap}</script>
 </body>
 </html>`

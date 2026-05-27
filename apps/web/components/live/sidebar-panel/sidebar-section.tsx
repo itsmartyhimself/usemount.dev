@@ -77,6 +77,29 @@ export function SidebarSection({
     ? leaves.filter((leaf) => searchMatch.leaves.has(leaf.id))
     : leaves
 
+  // Build the nested tree: group visible folders by parentId and leaves by
+  // folderId. A folder is a root when it has no parent (or its parent was
+  // filtered out by search). Ordered by `order` (assigned alphabetically).
+  const visibleFolderIds = new Set(displayFolders.map((f) => f.id))
+  const childFoldersByParent = new Map<string, FolderRecord[]>()
+  const rootFolders: FolderRecord[] = []
+  for (const f of [...displayFolders].sort((a, b) => a.order - b.order)) {
+    if (f.parentId && visibleFolderIds.has(f.parentId)) {
+      const arr = childFoldersByParent.get(f.parentId) ?? []
+      arr.push(f)
+      childFoldersByParent.set(f.parentId, arr)
+    } else {
+      rootFolders.push(f)
+    }
+  }
+  const leavesByFolder = new Map<string, LeafRecord[]>()
+  for (const l of [...displayLeaves].sort((a, b) => a.order - b.order)) {
+    if (!l.folderId) continue
+    const arr = leavesByFolder.get(l.folderId) ?? []
+    arr.push(l)
+    leavesByFolder.set(l.folderId, arr)
+  }
+
   return (
     <SidebarGroup>
       <div style={headerCollapseStyle(collapsed)}>
@@ -87,7 +110,7 @@ export function SidebarSection({
       <SidebarMenu>
         {section.kind === "folders" ? (
           <>
-            {displayFolders.length === 0 ? (
+            {rootFolders.length === 0 ? (
               <li className="type-3" style={emptyHintStyle}>
                 {collapsed
                   ? null
@@ -96,22 +119,14 @@ export function SidebarSection({
                     : "No folders yet."}
               </li>
             ) : (
-              displayFolders.map((folder) => {
-                const childLeaves = displayLeaves
-                  .filter((leaf) => leaf.folderId === folder.id)
-                  .sort((a, b) => a.order - b.order)
-                return (
-                  <SidebarFolder
-                    key={folder.id}
-                    folder={folder}
-                    hasChildren={childLeaves.length > 0}
-                  >
-                    {childLeaves.map((leaf) => (
-                      <SidebarLeaf key={leaf.id} leaf={leaf} />
-                    ))}
-                  </SidebarFolder>
-                )
-              })
+              rootFolders.map((folder) => (
+                <FolderNode
+                  key={folder.id}
+                  folder={folder}
+                  childFoldersByParent={childFoldersByParent}
+                  leavesByFolder={leavesByFolder}
+                />
+              ))
             )}
           </>
         ) : (
@@ -131,5 +146,37 @@ export function SidebarSection({
         )}
       </SidebarMenu>
     </SidebarGroup>
+  )
+}
+
+// Recursive folder node: renders its child folders (nested) then its direct
+// leaves. Indentation comes from SidebarFolder's nested SidebarMenuSub margin,
+// so depth needs no explicit prop. `hasChildren` covers folders OR leaves.
+function FolderNode({
+  folder,
+  childFoldersByParent,
+  leavesByFolder,
+}: {
+  folder: FolderRecord
+  childFoldersByParent: Map<string, FolderRecord[]>
+  leavesByFolder: Map<string, LeafRecord[]>
+}) {
+  const childFolders = childFoldersByParent.get(folder.id) ?? []
+  const childLeaves = leavesByFolder.get(folder.id) ?? []
+  const hasChildren = childFolders.length > 0 || childLeaves.length > 0
+  return (
+    <SidebarFolder folder={folder} hasChildren={hasChildren}>
+      {childFolders.map((cf) => (
+        <FolderNode
+          key={cf.id}
+          folder={cf}
+          childFoldersByParent={childFoldersByParent}
+          leavesByFolder={leavesByFolder}
+        />
+      ))}
+      {childLeaves.map((leaf) => (
+        <SidebarLeaf key={leaf.id} leaf={leaf} />
+      ))}
+    </SidebarFolder>
   )
 }

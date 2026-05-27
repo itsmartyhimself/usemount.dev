@@ -10,11 +10,10 @@
 // and kind=unsupported are shown but disabled (architecture-brief §3 failure
 // modes 1 + 6).
 //
-// Folder structure: each unique `folder_path` becomes one folder under the
-// "library" section. We don't try to reconstruct nested folder hierarchy
-// from path parts in v1 — the dogfood has one component per direct folder
-// already (`apps/web/components/live/button/`, `.../input/`, etc.), so a
-// single-level grouping reads correctly. Nested folders are a Step 5 polish.
+// Folder structure: each `folder_path` is split into segments and one folder
+// is created per segment with `parentId` links, so the sidebar renders a real
+// nested tree (e.g. `components/ui/forms` → components › ui › forms). A leaf
+// points at its full-path folder; intermediate folders hold only child folders.
 
 import type { SupabaseClient } from "@supabase/supabase-js"
 import {
@@ -125,20 +124,38 @@ export function buildRegistry(
   } = {},
 ): Registry {
   const folderById = new Map<string, FolderRecord>()
+  // Ensure a FolderRecord exists for `path` AND every ancestor segment, linked
+  // by parentId. Idempotent (deduped by id = the path).
+  const ensureFolderPath = (path: string) => {
+    if (folderById.has(path)) return
+    const segs = path.split("/")
+    const parentPath = segs.slice(0, -1).join("/")
+    if (parentPath) ensureFolderPath(parentPath)
+    folderById.set(path, {
+      id: path,
+      sectionId: "library",
+      name: segs[segs.length - 1] || path,
+      parentId: parentPath || undefined,
+      order: folderById.size,
+    })
+  }
   const leaves: LeafRecord[] = []
   for (const r of rows) {
     const folderPath = r.folder_path ?? ""
-    const folderId = folderPath || "root"
-    if (!folderById.has(folderId)) {
-      const display = folderPath
-        ? folderPath.split("/").pop() || folderPath
-        : "Components"
-      folderById.set(folderId, {
-        id: folderId,
-        sectionId: "library",
-        name: display,
-        order: folderById.size,
-      })
+    let folderId: string
+    if (folderPath) {
+      ensureFolderPath(folderPath)
+      folderId = folderPath
+    } else {
+      folderId = "root"
+      if (!folderById.has("root")) {
+        folderById.set("root", {
+          id: "root",
+          sectionId: "library",
+          name: "Components",
+          order: folderById.size,
+        })
+      }
     }
     const kind = safeKind(r.kind)
     const disabled = kind !== "component" || !r.artifact_url
@@ -199,34 +216,54 @@ const EMPTY_INSTANCE_REGISTRY: InstanceRegistry = {
   manifests: new Map(),
 }
 
+const MANIFEST_SELECT =
+  "id, instance_id, slug, folder_path, title, kind, variants_json, states_json, props_schema_json, artifact_url, preview_artifact_url, source_hash"
+
+type RegistryOptions = {
+  user?: { name: string; email: string; avatarUrl?: string }
+}
+
 /**
- * Fetch the manifest rows for an instance + build both the sidebar registry
- * and the runtime manifest map. RLS gates visibility to workspace members.
- * Returns an empty-but-valid registry on error or missing instance so the
- * UI degrades to "no components yet" rather than throwing.
+ * Fetch the manifest rows + build the registry, THROWING on a Supabase error.
+ * The client-side reseed (sidebar-panel-provider) uses this so a transient
+ * error skips the update — keeping the live sidebar — instead of overwriting
+ * it with empty. RLS gates visibility to workspace members.
  */
-export async function fetchInstanceRegistry(
+export async function fetchInstanceRegistryOrThrow(
   supabase: SupabaseClient,
   instanceId: string | null | undefined,
-  options: { user?: { name: string; email: string; avatarUrl?: string } } = {},
+  options: RegistryOptions = {},
 ): Promise<InstanceRegistry> {
   if (!instanceId) return EMPTY_INSTANCE_REGISTRY
   const { data, error } = await supabase
     .from("component_manifests")
-    .select(
-      "id, instance_id, slug, folder_path, title, kind, variants_json, states_json, props_schema_json, artifact_url, preview_artifact_url, source_hash",
-    )
+    .select(MANIFEST_SELECT)
     .eq("instance_id", instanceId)
-  if (error) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("[fetchInstanceRegistry]", error.message)
-    }
-    return EMPTY_INSTANCE_REGISTRY
-  }
+  if (error) throw new Error(error.message)
   const rows = (data ?? []) as ComponentManifestRow[]
   return {
     registry: buildRegistry(rows, options),
     manifests: buildManifestMap(rows),
+  }
+}
+
+/**
+ * Like the above but degrades to an empty-but-valid registry on error or
+ * missing instance — the server-side seed path (InstancePage) must always
+ * render, even as "no components yet", rather than throwing.
+ */
+export async function fetchInstanceRegistry(
+  supabase: SupabaseClient,
+  instanceId: string | null | undefined,
+  options: RegistryOptions = {},
+): Promise<InstanceRegistry> {
+  try {
+    return await fetchInstanceRegistryOrThrow(supabase, instanceId, options)
+  } catch (e) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[fetchInstanceRegistry]", (e as Error).message)
+    }
+    return EMPTY_INSTANCE_REGISTRY
   }
 }
 
