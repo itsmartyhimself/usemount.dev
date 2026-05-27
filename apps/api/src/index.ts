@@ -41,19 +41,26 @@ const httpServer = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`usemount.dev API running on port ${info.port}`)
 })
 
-// Build worker runs alongside the HTTP server — it polls `build_jobs` via the
-// 0003 lease RPC, processes one job at a time, heartbeats while running. Set
-// DISABLE_BUILD_WORKER=1 in dev to run the API without it (e.g. when working
-// on routes only, no real builds needed).
-const workerEnabled = !process.env.DISABLE_BUILD_WORKER
+// Build worker + reconciler share the `build_jobs` queue. They run on Railway
+// by default but stay OFF when started LOCALLY (RAILWAY_REPLICA_ID unset) unless
+// ENABLE_BUILD_WORKER=1 — a local .env.local usually points at the PRODUCTION
+// Supabase, so an unguarded local worker leases real prod build jobs and strands
+// them on laptop sleep until the 10-min stale-lease reclaim (PR23 incident). The
+// opt-in lets you run the pipeline locally on purpose; DISABLE_* still force off.
+const onRailway = !!process.env.RAILWAY_REPLICA_ID
+const buildPipelineAllowed = onRailway || !!process.env.ENABLE_BUILD_WORKER
+
+const workerEnabled = buildPipelineAllowed && !process.env.DISABLE_BUILD_WORKER
 const worker = workerEnabled ? startWorkerLoop() : null
 
-// Reconciler (Step 5.2) ticks every 2h, diffs pinned-branch HEAD vs
-// last_synced_commit_sha and enqueues a build_jobs row on drift. Cheap
-// insurance against a missed push-webhook. Independent DISABLE flag —
-// operators can run worker-only or reconciler-only by combining flags.
-const reconcilerEnabled = !process.env.DISABLE_RECONCILER
+const reconcilerEnabled = buildPipelineAllowed && !process.env.DISABLE_RECONCILER
 const reconciler = reconcilerEnabled ? startReconcilerLoop() : null
+
+if (!buildPipelineAllowed) {
+  console.log(
+    "[main] build worker + reconciler OFF (local run; set ENABLE_BUILD_WORKER=1 to run them against your configured Supabase)",
+  )
+}
 
 // Single source of process lifecycle. On SIGTERM/SIGINT: stop accepting new
 // leases + cancel the reconciler timer, await the current job and any tick in
