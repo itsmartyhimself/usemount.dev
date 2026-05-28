@@ -1,15 +1,10 @@
 "use client"
 
-// PR19 — the in-app folder/component picker. Reads the connected repo's folder
-// tree live from GitHub (no rebuild just to look), lets the user tick which
-// folders get previewed, persists the per-instance scan-scope override, and
-// kicks off a rebuild — polling build_jobs (browser Supabase RLS session) until
-// it lands, then reloading so the freshly-built sidebar shows.
-//
-// IMPORTANT semantics: the selection REPLACES the preview scope (it does not add
-// to mount.config.ts). The copy + the "currently previewing" banner say so.
-//
-// Styling: Dialog primitive (same as search-modal), all visuals via tokens.
+// In-app folder/component picker: reads the connected repo's folder tree live
+// from GitHub, lets the user tick which folders get previewed, persists the
+// per-instance scan-scope override, and kicks off a rebuild — polling build_jobs
+// (browser Supabase RLS session), then reseeding the sidebar in place when it
+// lands. The selection REPLACES the preview scope; it does not add to mount.config.ts.
 
 import {
   useCallback,
@@ -132,9 +127,9 @@ const scrollStyle: CSSProperties = {
   overflowY: "auto",
   maxHeight: "min(52vh, 420px)",
   minHeight: 160,
-  // spacing-2 here + each row's spacing-3 paddingInline lines the row text up
-  // with the spacing-5 header/footer gutters (no doubled inset).
-  paddingInline: "var(--spacing-2)",
+  // spacing-3 here + each row's spacing-3 paddingInline = 16px, aligning the
+  // tree's left/right inset to the spacing-5 header/footer gutters (symmetric).
+  paddingInline: "var(--spacing-3)",
   paddingBlock: "var(--spacing-2)",
 }
 
@@ -351,7 +346,6 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
         actions.closePicker()
         return
       }
-      // Begin a fresh build session.
       terminalRef.current = false
       glideStartedRef.current = false
       estimateRef.current = DEFAULT_ESTIMATE_MS
@@ -401,28 +395,25 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
         className="max-w-[calc(100vw-32px)] gap-0 p-0 overflow-hidden rounded-[var(--radius-4)] border-[var(--color-border-primary)] bg-[var(--color-bg-elevated)] sm:max-w-none"
         style={contentStyle}
       >
-        {/* Header — flex column with a real gap. Margins between .text-trim
-            elements get eaten by the cap-height trim's negative pseudo-margins,
-            so a flex gap is the only reliable vertical rhythm here. */}
+        {/* Header. DialogTitle is sr-only (a11y label only) so the shadcn
+            primitive's text-lg/leading-none can't override the .type-* cap
+            trim; the visible heading is a separate element, like search-modal. */}
         <div
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: "var(--spacing-2)",
+            gap: "var(--spacing-3)",
             padding: "var(--spacing-5) var(--spacing-5) var(--spacing-4)",
             borderBottom: "1px solid var(--color-border-primary)",
           }}
         >
-          <DialogTitle
+          <DialogTitle className="sr-only">Choose folders to preview</DialogTitle>
+          <h2
             className="type-6 text-trim"
-            style={{
-              color: "var(--color-text-primary)",
-              margin: 0,
-              fontWeight: "inherit",
-            }}
+            style={{ color: "var(--color-text-primary)", margin: 0 }}
           >
             Choose folders to preview
-          </DialogTitle>
+          </h2>
           <p
             className="type-3 text-trim"
             style={{ color: "var(--color-text-secondary)", margin: 0 }}
@@ -431,7 +422,7 @@ export function FolderPickerModal({ instanceId }: { instanceId?: string }) {
             <strong style={{ color: "var(--color-text-primary)" }}>
               replaces
             </strong>{" "}
-            the current scope and overrides <code>mount.config.ts</code>.
+            the current scope.
           </p>
         </div>
 
@@ -640,6 +631,15 @@ function PickerRow({
   const hasChildren = node.children.length > 0
   const includedByParent = hasSelectedAncestor(node.path, selected)
   const checked = includedByParent || selected.has(node.path)
+  // Auto-included (via a selected ancestor): a light heather box with a grey
+  // check. Directly-selected: a solid dark box with a white check. The folder
+  // label dims to text-tertiary when included (below). No opacity hacks.
+  const checkboxFill = includedByParent
+    ? "var(--color-border-secondary)"
+    : "var(--color-text-primary)"
+  const checkmarkColor = includedByParent
+    ? "var(--color-text-secondary)"
+    : "var(--color-bg-primary)"
   const [hovered, setHovered] = useState(false)
 
   // Mirrors the size-32 sidebar Row exactly (row.config.ts ROW_DIMENSIONS[32]):
@@ -709,18 +709,14 @@ function PickerRow({
             justifyContent: "center",
             flexShrink: 0,
             borderRadius: "var(--radius-1)",
-            // The design's real high-contrast selection is a solid text-primary
-            // fill (every active Row uses it) — NOT --color-accent, which is a
-            // faint hover-grey and read as a mushy checkbox.
             border: checked
-              ? "1px solid var(--color-text-primary)"
+              ? `1px solid ${checkboxFill}`
               : "1px solid var(--color-border-secondary)",
-            background: checked ? "var(--color-text-primary)" : "transparent",
-            opacity: includedByParent ? 0.55 : 1,
+            background: checked ? checkboxFill : "transparent",
           }}
         >
           {checked ? (
-            <Checkmark size={12} style={{ color: "var(--color-bg-primary)" }} />
+            <Checkmark size={12} style={{ color: checkmarkColor }} />
           ) : null}
         </span>
 

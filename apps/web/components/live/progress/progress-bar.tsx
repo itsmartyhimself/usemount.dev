@@ -1,7 +1,7 @@
 "use client"
 
-// Token-styled determinate progress bar — recessed track + high-contrast fill
-// so it reads correctly in light and dark.
+// Token-styled determinate progress bar — recessed track + soft, low-contrast
+// heather fill (reads as gentle progress, not a harsh black bar).
 
 import { type CSSProperties } from "react"
 import { useReducedMotion, type Transition } from "framer-motion"
@@ -18,7 +18,7 @@ const trackStyle: CSSProperties = {
 
 const indicatorStyle: CSSProperties = {
   borderRadius: "var(--radius-full)",
-  background: "var(--color-primary)",
+  background: "var(--color-border-secondary)",
 }
 
 export function ProgressBar({
