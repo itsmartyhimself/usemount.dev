@@ -152,7 +152,12 @@ export async function GET(
     headers: {
       "content-type": "text/html; charset=utf-8",
       "content-security-policy": buildCsp(nonce, supabaseHost),
-      "cache-control": `private, max-age=${SIGNED_URL_TTL_SECONDS - 60}`,
+      // Dev: never cache, so iframe-html.ts edits show on a plain reload (the
+      // long prod cache otherwise replays stale HTML during local iteration).
+      "cache-control":
+        process.env.NODE_ENV === "development"
+          ? "no-store"
+          : `private, max-age=${SIGNED_URL_TTL_SECONDS - 60}`,
       "x-content-type-options": "nosniff",
       "x-frame-options": "SAMEORIGIN",
       "referrer-policy": "no-referrer",
