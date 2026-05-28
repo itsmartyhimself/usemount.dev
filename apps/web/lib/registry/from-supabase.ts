@@ -67,13 +67,30 @@ function safeKind(raw: string | null): BuildManifestKind {
   return "unsupported"
 }
 
+/**
+ * Sanitize an enum control's options. Stale manifests carried a leading ""
+ * (an empty selectable row that also became the synthesized default — it read
+ * as a blank pill). Strip blank/whitespace-only entries, and drop the whole
+ * control when fewer than two real options remain: a 0/1-option toggle renders
+ * no UI and would only leave the prop unset (String(undefined) → "undefined").
+ */
+function cleanEnumControl(
+  control: { prop: string; options: string[] } | undefined,
+): { prop: string; options: string[] } | undefined {
+  if (!control || typeof control !== "object") return undefined
+  const { prop, options } = control
+  if (typeof prop !== "string" || !Array.isArray(options)) return undefined
+  const cleaned = options.filter((o) => typeof o === "string" && o.trim() !== "")
+  return cleaned.length >= 2 ? { prop, options: cleaned } : undefined
+}
+
 function safeControls(raw: unknown): BuildManifestControls {
   if (!raw || typeof raw !== "object") return EMPTY_CONTROLS
   const r = raw as Partial<BuildManifestControls>
   return {
-    variants: r.variants,
-    sizes: r.sizes,
-    forms: r.forms,
+    variants: cleanEnumControl(r.variants),
+    sizes: cleanEnumControl(r.sizes),
+    forms: cleanEnumControl(r.forms),
     booleans: Array.isArray(r.booleans) ? r.booleans : [],
     slots: Array.isArray(r.slots) ? r.slots : [],
     strings: Array.isArray(r.strings) ? r.strings : [],
