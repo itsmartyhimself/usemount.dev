@@ -355,7 +355,14 @@ window.addEventListener("unhandledrejection", (event) => {
 <meta charset="utf-8">
 <title>${titleSafe} preview</title>
 <style nonce="${opts.nonce}">
-html, body { margin: 0; padding: 0; background: transparent; color-scheme: light dark; overflow: hidden; }
+html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+/* color-scheme lives on <body>, NOT <html>: the iframe's canvas backdrop follows
+   the ROOT element's scheme, so a dark scheme there paints an opaque dark canvas
+   that's hidden at rest (iframe == component box) but exposed as a black flash
+   when #frame grows for an above/left popover and snaps back on its exit. Scoped
+   to <body>, the canvas stays transparent while the component and its
+   body-portaled popovers still get light/dark theming. */
+body { color-scheme: light dark; }
 #frame {
   width: max-content;
   padding: ${OVERFLOW_RESERVE}px;
