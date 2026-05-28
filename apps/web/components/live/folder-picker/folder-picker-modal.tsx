@@ -15,7 +15,7 @@ import {
   type CSSProperties,
 } from "react"
 import { Checkmark, ChevronDown, ChevronRight, Folder } from "@carbon/icons-react"
-import type { Transition } from "framer-motion"
+import { AnimatePresence, motion, type Transition } from "framer-motion"
 import {
   Dialog,
   DialogContent,
@@ -31,6 +31,7 @@ import {
 import { useSidebarPanel } from "@/components/live/sidebar-panel/use-sidebar-panel"
 import { useToast } from "@/components/live/toast"
 import { ProgressBar } from "@/components/live/progress/progress-bar"
+import { ROW_SPRING } from "@/components/live/row/row.config"
 
 interface TreeNode extends RepoTreeDir {
   name: string
@@ -749,19 +750,33 @@ function PickerRow({
           {node.totalCount}
         </span>
       </div>
-      {hasChildren && isOpen
-        ? node.children.map((child) => (
-            <PickerRow
-              key={child.path}
-              node={child}
-              depth={depth + 1}
-              selected={selected}
-              expanded={expanded}
-              onToggleSelected={onToggleSelected}
-              onToggleExpanded={onToggleExpanded}
-            />
-          ))
-        : null}
+      {/* Mirror sidebar-folder.tsx: animate height 0<->auto so expand/collapse
+          glides and the modal grows/shrinks with it (the scroll area is
+          height:auto between min/max, so it reflows with the spring). */}
+      <AnimatePresence initial={false}>
+        {hasChildren && isOpen ? (
+          <motion.div
+            key="children"
+            initial={{ opacity: 0, height: 0, y: 20 }}
+            animate={{ opacity: 1, height: "auto", y: 0 }}
+            exit={{ opacity: 0, height: 0, y: 20 }}
+            transition={ROW_SPRING}
+            style={{ overflow: "hidden" }}
+          >
+            {node.children.map((child) => (
+              <PickerRow
+                key={child.path}
+                node={child}
+                depth={depth + 1}
+                selected={selected}
+                expanded={expanded}
+                onToggleSelected={onToggleSelected}
+                onToggleExpanded={onToggleExpanded}
+              />
+            ))}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </>
   )
 }
