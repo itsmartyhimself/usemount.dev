@@ -93,7 +93,7 @@ export function SidebarHeaderZone() {
       <div style={brandWrapStyle(collapsed)}>
         <span role="img" aria-label="Mount" style={glyphStyle} />
       </div>
-      <SidebarDivider />
+      {!collapsed && <SidebarDivider />}
       <div style={searchRowStyle(collapsed)}>
         <div style={searchWrapStyle(collapsed)}>
           <SearchInput

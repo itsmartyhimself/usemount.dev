@@ -20,26 +20,29 @@ const topPagesWrapperStyle: CSSProperties = {
 }
 
 export function SidebarTree() {
-  const { registry } = useSidebarPanel()
+  const { registry, collapsed } = useSidebarPanel()
+  const hasTopPages = registry.topPages.length > 0
 
   return (
     <div style={{ display: "flex", flexDirection: "column" }}>
-      <SidebarMenu style={topPagesWrapperStyle}>
-        {registry.topPages.map((page) => {
-          // Top pages reuse the doc-leaf form. sectionId is unused by
-          // SidebarLeaf's doc path — "library" is a harmless placeholder.
-          const asLeaf: LeafRecord = {
-            id: page.id,
-            name: page.label,
-            kind: "doc",
-            sectionId: "library",
-            iconName: page.iconName,
-            order: 0,
-          }
-          return <SidebarLeaf key={page.id} leaf={asLeaf} depth={0} />
-        })}
-      </SidebarMenu>
-      <SidebarDivider />
+      {hasTopPages && (
+        <SidebarMenu style={topPagesWrapperStyle}>
+          {registry.topPages.map((page) => {
+            // Top pages reuse the doc-leaf form. sectionId is unused by
+            // SidebarLeaf's doc path — "library" is a harmless placeholder.
+            const asLeaf: LeafRecord = {
+              id: page.id,
+              name: page.label,
+              kind: "doc",
+              sectionId: "library",
+              iconName: page.iconName,
+              order: 0,
+            }
+            return <SidebarLeaf key={page.id} leaf={asLeaf} depth={0} />
+          })}
+        </SidebarMenu>
+      )}
+      {hasTopPages && !collapsed && <SidebarDivider />}
       {registry.sections.map((section, idx) => {
         const folders = registry.folders
           .filter((folder) => folder.sectionId === section.id)
