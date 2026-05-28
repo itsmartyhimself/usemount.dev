@@ -14,6 +14,11 @@ export function StepAssignWorkspace({
   value,
   onChange,
 }: StepAssignWorkspaceProps) {
+  // Columns track the workspace count (max 2 per row, the original density) so
+  // the cards fill the parent — 1 workspace spans full width, 2 split evenly,
+  // 3+ wrap. Unlike the dashboard this is a picker: every workspace must stay
+  // visible, so there's no hide cap.
+  const columns = Math.max(1, Math.min(workspaces.length, 2))
   return (
     <div
       style={{
@@ -43,7 +48,7 @@ export function StepAssignWorkspace({
         role="radiogroup"
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
           gap: "var(--spacing-1)",
         }}
       >
