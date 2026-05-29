@@ -5159,4 +5159,47 @@ Day-1 spike (Step 4.0) confirms the build pipeline holds on the 700-person codeb
       The variant blank-row bug was carried into PR26 with the PR25 handover WARNING that a mid-PR25 diagnosis ('the union's `none` member is the default') was WRONG. PR26 re-diagnosed from scratch and confirms: the bug is a SEPARATE empty '' option in the stored controls.variants.options — NOT the legit `none`/null bypass variant (a real value some components have, which must and does still render). The render path injects nothing (variant-toggle.tsx maps options directly; canvas-controls.tsx:52); the API introspect already strips undefined/null literals (introspect.ts:102) — so the blank is stored data, fixed at the web read boundary. Only the spurious blank is gone; 'none' stays.
     </correction>
   </pr>
+
+  <extra-work label="canvas: forward iframe pinch-zoom + two-finger pan to the host canvas"
+      branch="staging (direct commit — concurrent multi-agent session; committed separately per owner)"
+      base="staging"
+      date="2026-05-29"
+      covers="OUT-OF-BAND fix — NOT a migration step / PR (owner asked to log it as standalone extra work). Closes two canvas-input gaps that only happened when the cursor was over a preview iframe. ROOT CAUSE: the iframe is sandbox=allow-scripts WITHOUT allow-same-origin (opaque origin), so wheel/pinch events fire INSIDE the frame and never reach the host's canvas wheel handler (use-canvas-input.ts) — over a component the browser did its NATIVE page-zoom (pinch) and two-finger drag did NOTHING (no canvas pan), while over the background/overlays it already worked. FIX reuses the existing host&lt;->iframe postMessage protocol (no new transport): the iframe bootstrap (iframe-html.ts) runs ONE capturing, passive:false wheel listener and forwards two new IframeToHost messages. (1) ZOOM — ctrl/meta wheel (macOS trackpad pinch): preventDefault() kills the native page-zoom, post `wheel`{deltaY,x,y}; host maps the iframe-local cursor onto the zoom-scaled iframe rect then into viewport coords and zooms the CANVAS anchored under the cursor. (2) PAN — plain two-finger drag: post `pan`{deltaX,deltaY}; host does panBy(-deltaX,-deltaY) (screen-space, NO zoom scaling — matches the background handler). NATIVE SCROLL-CHAINING (owner's explicit choice): a plain wheel becomes a pan ONLY when no inner element can scroll further in that direction (scrollableConsumes walks e.target ancestors checking overflow auto/scroll + per-axis boundary), so a component's own scroll area wins until it hits its edge, then the canvas pans. Components stay fully interactive (click/hover/internal-scroll preserved). The wheel→zoom curve is centralised in canvas-view-context (new zoomByWheel, single ZOOM_SPEED shared by the host handler + the forwarded path)."
+      verified="STATIC (2026-05-29) + OWNER-CONFIRMED ZOOM; PAN gesture pending. web `tsc --noEmit` exit 0, api `tsc --noEmit` exit 0, eslint clean (iframe-html.ts is eslint-ignored — its bootstrap is a template STRING). shared rebuilt (`pnpm --filter @usemount/shared build`) — REQUIRED, apps import the compiled lib/ not src (see [[shared-compiled-output]]); the compiled isIframeToHost guard was runtime-tested via node: accepts/rejects `wheel`+`pan`, ready/error still pass, unknown kinds still rejected. The ACTUAL served iframe bootstrap (its JS lives inside a template string the TS compiler can't see) was extracted + `node --check`'d → valid JS. OWNER confirmed ZOOM-over-component works on their machine. NOT exercised by gesture: PAN + scroll-chaining over a real scrollable component (needs a trackpad + a component with an inner scroll area — flagged to owner); native-zoom-prevention (synthetic events can't trigger native zoom); the full apps/api verify:iframe harness (needs live Supabase writes — guard proven via the compiled-lib node check instead).">
+    <secrets-policy>App code only (5 source files + 1 test). No secrets, no .env.local read, no infra/dashboard step. shared rebuild is a local `tsc -b`. Push deploys web via Railway watch=staging.</secrets-policy>
+
+    <session-nature>Plan-execution from ~/.claude/plans/canvas-iframe-zoom-forwarding.plan.xml (zoom), then an owner-requested adjacent follow-up (pan) — both ask-user-question'd + advisor-reviewed before coding. CONCURRENT MULTI-AGENT: another agent edited iframe-mount.tsx mid-session (an imperative applyGeo geometry refactor) then reverted it; this entry + commit contain ONLY this session's zoom+pan work (owner: "better to have multiple commits from different agents"). orchestrator-mode NOT used.</session-nature>
+
+    <changes>
+      PROTOCOL (packages/shared/src/iframe-protocol.ts): two additive IframeToHost variants — `wheel`{deltaY,x,y} (zoom) + `pan`{deltaX,deltaY} — plus isIframeToHost guard cases. IFRAME_PROTOCOL_VERSION stays 1 (additive; old served iframes simply never send them). lib/ rebuilt.
+      IFRAME (apps/web/lib/preview/iframe-html.ts): one capturing passive:false `wheel` listener in the bootstrap — ctrl/meta → preventDefault + post `wheel`; plain → scrollableConsumes(e.target,dx,dy) ? let the component scroll : preventDefault + post `pan`. New scrollableConsumes() walks ancestors for overflow auto/scroll with room left per-axis.
+      ZOOM CURVE (canvas-view-context.tsx): new zoomByWheel(deltaY,cx,cy) = zoomByAt(exp(-deltaY*ZOOM_SPEED),…); ZOOM_SPEED moved here as the single source; added to the context type + value memo + deps.
+      HOST WHEEL HANDLER (use-canvas-input.ts): the ctrl/meta branch now calls zoomByWheel (was an inline exp curve); the local ZOOM_SPEED removed.
+      HOST IFRAME (iframe-mount.tsx): useCanvasView() for {zoomByWheel,panBy,viewportRef}; `wheel` case maps iframe-local x/y onto the zoom-scaled rect then into viewport coords then zoomByWheel; `pan` case → panBy(-dx,-dy). onMessage dep array updated.
+      TEST (apps/api/scripts/verify-iframe.ts): positive+negative guard cases for `wheel` + `pan` (mirrors the ready/resize/error catalog).
+      NOT changed: the PR20/22 overflow mechanism, PR24 color-scheme, the deferred WOBBLE. Did NOT touch the 2 folder-picker files / pixloader / Design Purgatory in the working tree (other agents' / prior work — left for their own commits).
+    </changes>
+
+    <deviations>
+      - Standalone fix, NOT a numbered PR / migration step (owner: log as extra work).
+      - Committed + PUSHED this session (owner asked) — unlike the recent PR14-26 ask-before-push; deploys web via Railway watch=staging.
+      - Concurrent multi-agent on iframe-mount.tsx: another agent's applyGeo refactor landed then was reverted; reviewed `git diff HEAD` to confirm the committed diff is PURELY this session's zoom+pan before staging ONLY my 6 files (no `git add -A`).
+      - PAN scroll-chaining carries two accepted tradeoffs the owner chose: (a) flicking a list hard to its edge spills leftover momentum into a canvas pan; (b) preventDefault on plain wheel disables a component that reads wheel for NON-scroll (number-field step, wheel-zoom map) while hovered. Both rare in previews.
+    </deviations>
+
+    <verification gate="canvas zoom+pan forwarding" result="STATIC green + owner-confirmed zoom; pan gesture + scroll-chaining pending a trackpad test over a scrollable component.">
+      web tsc 0, api tsc 0, eslint clean; compiled isIframeToHost guard runtime-tested (wheel+pan accept/reject, ready/error pass, unknown reject); served bootstrap node --check'd (JS-in-string). OWNER confirmed zoom-over-component on localhost.
+      NOT exercised: pan + scroll-chaining over a real scrollable component (trackpad + inner-scroll component needed — handed to owner); native page-zoom prevention (synthetic events can't trigger it); the live verify:iframe harness (guard proven via compiled-lib node check).
+    </verification>
+
+    <known-risks>
+      - **Pan/scroll-chaining unverified by gesture** — code is static-verified + isolated, but the scrollableConsumes path only runs over a component WITH an inner scroll area; a non-scrollable component never exercises it. Owner to confirm: drag scrolls inner first, pans at the edge.
+      - **Prod needs the deploy to rebuild @usemount/shared** — lib/ is gitignored; only the src change is committed. Root `build` chains shared first and prod has always worked this way, so it should be automatic — see [[shared-compiled-output]]. If the iframe stops forwarding in prod, check the web build rebuilt shared.
+      - **Zoom focal point drifts slightly mid-popover** — when a popover has grown #frame (offsetWidth != component bbox) the iframe-local→viewport mapping is approximate; the resting case is exact. Acceptable (carry-forward from the zoom plan).
+    </known-risks>
+
+    <next>
+      Owner: trackpad-test PAN over a component with a real inner scroll area (scroll inner → reach edge → canvas pans) + a non-scrollable one (pans immediately); re-confirm zoom still anchors under the cursor at zoom 0.5/1/2. If pan feels off, debug scrollableConsumes boundary signs / panBy deltas. OWNER MANDATE carry-forward (verbatim): (1) bundle/decide at an ask-user-question kickoff; (2) keep updating &lt;migration-log&gt; every session (it WINS over handover docs); (3) don't revert what prior agents deliberately changed to fix bugs. Gesture-forwarding could later extend to keyboard-zoom-inside-iframe + space/middle-drag PAN started over the iframe (both still swallowed by the frame) — separate, not requested.
+    </next>
+  </extra-work>
 </migration-log>

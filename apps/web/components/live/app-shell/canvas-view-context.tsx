@@ -24,6 +24,12 @@ const MIN_VISIBLE_RATIO = 0.5
 
 const clampZoom = (z: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z))
 
+// Mac-trackpad pinch (and ctrl/cmd + wheel) arrives as a wheel event with a
+// small per-tick deltaY; exp() turns it into a smooth, symmetric zoom factor.
+// Single source of truth so the canvas wheel handler and the iframe-forwarded
+// wheel path zoom on one curve.
+const ZOOM_SPEED = 0.01
+
 type CanvasViewContextValue = {
   view: CanvasView
   isAnimating: boolean
@@ -34,6 +40,7 @@ type CanvasViewContextValue = {
   panBy: (dx: number, dy: number) => void
   zoomAt: (clientX: number, clientY: number, nextZoom: number) => void
   zoomByAt: (factor: number, clientX: number, clientY: number) => void
+  zoomByWheel: (deltaY: number, clientX: number, clientY: number) => void
   zoomByAtCenter: (factor: number) => void
   reset: () => void
   fitToContent: () => void
@@ -165,6 +172,13 @@ export function CanvasViewProvider({ children }: { children: ReactNode }) {
     [applyPanBounds],
   )
 
+  const zoomByWheel = useCallback(
+    (deltaY: number, cx: number, cy: number) => {
+      zoomByAt(Math.exp(-deltaY * ZOOM_SPEED), cx, cy)
+    },
+    [zoomByAt],
+  )
+
   const zoomByAtCenter = useCallback(
     (factor: number) => {
       const size = getViewportSize()
@@ -236,6 +250,7 @@ export function CanvasViewProvider({ children }: { children: ReactNode }) {
       panBy,
       zoomAt,
       zoomByAt,
+      zoomByWheel,
       zoomByAtCenter,
       reset,
       fitToContent,
@@ -249,6 +264,7 @@ export function CanvasViewProvider({ children }: { children: ReactNode }) {
       panBy,
       zoomAt,
       zoomByAt,
+      zoomByWheel,
       zoomByAtCenter,
       reset,
       fitToContent,

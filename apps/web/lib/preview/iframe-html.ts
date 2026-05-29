@@ -317,6 +317,39 @@ ro.observe(document.body)
 const mo = new MutationObserver(scheduleSync)
 mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "data-state", "data-side"] })
 
+// Wheel over this opaque-origin iframe never reaches the parent canvas handler,
+// so forward the gestures the canvas owns:
+//   - zoom (ctrl/meta = macOS trackpad pinch): always; cancels the browser's
+//     NATIVE page zoom and hands the delta to the host so the CANVAS zooms.
+//   - pan (plain two-finger drag): only when no inner element can scroll in the
+//     gesture's direction, so the component keeps its own scrolling and the
+//     canvas pans once there's nothing left to scroll (native-feeling chaining).
+// passive:false lets preventDefault cancel the native action; capture beats any
+// component stopPropagation.
+function scrollableConsumes(node, dx, dy) {
+  for (let el = node; el && el !== document.body; el = el.parentElement) {
+    if (el.nodeType !== 1) continue
+    const s = getComputedStyle(el)
+    if (dy !== 0 && /(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight) {
+      if (dy < 0 ? el.scrollTop > 0 : el.scrollTop + el.clientHeight < el.scrollHeight - 1) return true
+    }
+    if (dx !== 0 && /(auto|scroll)/.test(s.overflowX) && el.scrollWidth > el.clientWidth) {
+      if (dx < 0 ? el.scrollLeft > 0 : el.scrollLeft + el.clientWidth < el.scrollWidth - 1) return true
+    }
+  }
+  return false
+}
+window.addEventListener("wheel", (e) => {
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault()
+    postToHost({ v: PROTOCOL_VERSION, kind: "wheel", deltaY: e.deltaY, x: e.clientX, y: e.clientY })
+    return
+  }
+  if (scrollableConsumes(e.target, e.deltaX, e.deltaY)) return
+  e.preventDefault()
+  postToHost({ v: PROTOCOL_VERSION, kind: "pan", deltaX: e.deltaX, deltaY: e.deltaY })
+}, { passive: false, capture: true })
+
 window.addEventListener("error", (event) => {
   if (renderedOk) return
   postToHost({ v: PROTOCOL_VERSION, kind: "error", message: String(event.message || event.error || "uncaught error") })

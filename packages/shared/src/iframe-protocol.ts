@@ -51,6 +51,16 @@ export type IframeToHost =
       offset?: IframeOffset
     }
   | { v: 1; kind: "error"; message: string }
+  // Pinch / ctrl+wheel over the opaque-origin iframe, forwarded so the host
+  // zooms the CANVAS instead of letting the browser page-zoom. x,y are the
+  // wheel event's clientX/clientY in IFRAME-LOCAL CSS px; the host maps them
+  // into viewport coordinates.
+  | { v: 1; kind: "wheel"; deltaY: number; x: number; y: number }
+  // Plain (non-zoom) wheel over the iframe that no inner scrollable can consume,
+  // forwarded so the host PANS the canvas — matching a two-finger drag over the
+  // canvas background. Raw wheel deltas; the host applies panBy(-deltaX,-deltaY)
+  // with no zoom scaling (pan is a screen-space translation).
+  | { v: 1; kind: "pan"; deltaX: number; deltaY: number }
 
 function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null
@@ -104,6 +114,14 @@ export function isIframeToHost(m: unknown): m is IframeToHost {
       return true
     case "error":
       return typeof m.message === "string"
+    case "wheel":
+      return (
+        typeof m.deltaY === "number" &&
+        typeof m.x === "number" &&
+        typeof m.y === "number"
+      )
+    case "pan":
+      return typeof m.deltaX === "number" && typeof m.deltaY === "number"
     default:
       return false
   }

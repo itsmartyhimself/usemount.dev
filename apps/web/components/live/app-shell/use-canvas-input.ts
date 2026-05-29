@@ -3,13 +3,10 @@
 import { useEffect, useRef } from "react"
 import { useCanvasView } from "./canvas-view-context"
 
-// Pinch on Mac trackpad surfaces as a wheel event with ctrlKey=true. The deltaY
-// magnitude is small per-tick; exp gives a smooth, symmetric zoom curve.
-const ZOOM_SPEED = 0.01
 const KEY_ZOOM_FACTOR = 1.2
 
 export function useCanvasInput() {
-  const { viewportRef, panBy, zoomByAt, zoomByAtCenter, reset, fitToContent } = useCanvasView()
+  const { viewportRef, panBy, zoomByWheel, zoomByAtCenter, reset, fitToContent } = useCanvasView()
   const spaceDownRef = useRef(false)
   const draggingRef = useRef(false)
 
@@ -24,8 +21,7 @@ export function useCanvasInput() {
       const cy = e.clientY - rect.top
 
       if (e.ctrlKey || e.metaKey) {
-        const factor = Math.exp(-e.deltaY * ZOOM_SPEED)
-        zoomByAt(factor, cx, cy)
+        zoomByWheel(e.deltaY, cx, cy)
       } else {
         panBy(-e.deltaX, -e.deltaY)
       }
@@ -33,7 +29,7 @@ export function useCanvasInput() {
 
     el.addEventListener("wheel", onWheel, { passive: false })
     return () => el.removeEventListener("wheel", onWheel)
-  }, [viewportRef, panBy, zoomByAt])
+  }, [viewportRef, panBy, zoomByWheel])
 
   useEffect(() => {
     const el = viewportRef.current

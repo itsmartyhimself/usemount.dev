@@ -311,6 +311,25 @@ function runProtocolGuardCases(): void {
       message: "boom",
     }),
   )
+  assert(
+    "isIframeToHost accepts wheel",
+    isIframeToHost({
+      v: IFRAME_PROTOCOL_VERSION,
+      kind: "wheel",
+      deltaY: -12,
+      x: 40,
+      y: 24,
+    }),
+  )
+  assert(
+    "isIframeToHost accepts pan",
+    isIframeToHost({
+      v: IFRAME_PROTOCOL_VERSION,
+      kind: "pan",
+      deltaX: 8,
+      deltaY: -16,
+    }),
+  )
   // Negative
   assert(
     "isIframeToHost rejects ready with negative bbox",
@@ -326,6 +345,25 @@ function runProtocolGuardCases(): void {
       v: IFRAME_PROTOCOL_VERSION,
       kind: "error",
       message: 42,
+    }),
+  )
+  assert(
+    "isIframeToHost rejects wheel with non-number deltaY",
+    !isIframeToHost({
+      v: IFRAME_PROTOCOL_VERSION,
+      kind: "wheel",
+      deltaY: "fast",
+      x: 40,
+      y: 24,
+    }),
+  )
+  assert(
+    "isIframeToHost rejects pan with non-number deltaX",
+    !isIframeToHost({
+      v: IFRAME_PROTOCOL_VERSION,
+      kind: "pan",
+      deltaX: "left",
+      deltaY: 16,
     }),
   )
   assert(

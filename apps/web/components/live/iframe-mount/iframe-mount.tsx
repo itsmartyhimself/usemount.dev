@@ -39,6 +39,7 @@ import {
   isIframeToHost,
 } from "@usemount/shared"
 import { createSupabaseBrowserClient } from "@/lib/supabase/client"
+import { useCanvasView } from "@/components/live/app-shell/canvas-view-context"
 
 export interface IframeMountProps {
   manifestId: string
@@ -89,6 +90,7 @@ export function IframeMount({
   onError,
 }: IframeMountProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const { zoomByWheel, panBy, viewportRef } = useCanvasView()
   const [geo, setGeo] = useState<FrameGeo>({
     bboxW: INITIAL_W,
     bboxH: INITIAL_H,
@@ -163,11 +165,33 @@ export function IframeMount({
         case "error":
           onError?.(m.message)
           break
+        case "wheel": {
+          const iframeEl = iframeRef.current
+          const vp = viewportRef.current
+          if (!iframeEl || !vp) break
+          const ir = iframeEl.getBoundingClientRect()
+          const vr = vp.getBoundingClientRect()
+          // The iframe element is scaled by the canvas zoom (rect.width =
+          // offsetWidth * zoom). Map the iframe-local cursor point onto the
+          // displayed element, then into viewport coords — the space
+          // zoomByWheel/zoomByAt expect (clientX - viewportRect.left).
+          const scaleX = iframeEl.offsetWidth ? ir.width / iframeEl.offsetWidth : 1
+          const scaleY = iframeEl.offsetHeight ? ir.height / iframeEl.offsetHeight : 1
+          const cx = ir.left + m.x * scaleX - vr.left
+          const cy = ir.top + m.y * scaleY - vr.top
+          zoomByWheel(m.deltaY, cx, cy)
+          break
+        }
+        case "pan":
+          // Raw wheel deltas, no zoom scaling — pan is a screen-space translate
+          // (same as the canvas-background wheel handler in use-canvas-input).
+          panBy(-m.deltaX, -m.deltaY)
+          break
       }
     }
     window.addEventListener("message", onMessage)
     return () => window.removeEventListener("message", onMessage)
-  }, [onBbox, onError, postToIframe])
+  }, [onBbox, onError, postToIframe, zoomByWheel, panBy, viewportRef])
 
   // When props change after ready, push setProps. Pre-ready changes get
   // flushed inside the `ready` handler from propsRef.
